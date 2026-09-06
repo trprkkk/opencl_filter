@@ -93,9 +93,11 @@ as scalar per-frame flags `scN` here; wiring the full SAD-based
 `kl_calculate_sad` reduction is part of the motion stage.
 
 Motion / super-sampling kernels now live in `src/opencl/ktgmc/kernels/ktgmc_motion.cl`
-(see `docs/MV_PORT_SPEC.md`). Validated: the degrain weight helpers
-(`dev_degrain_weight`, `dev_norm_weights`). Source-ported (RIG-VERIFY):
-`kl_copy_pad`, `kl_pad_frame_h/v`.
+(see `docs/MV_PORT_SPEC.md`). ALG-VERIFIED: the degrain weight helpers
+(`dev_degrain_weight`, `dev_norm_weights`) and the MV-aux integer kernels
+(`kl_write_default_mv`, `kl_scene_change`/`_x2`, `kl_short_to_byte`,
+`kl_short_to_byte_or_copy_src`). Source-ported (RIG-VERIFY, device run pending):
+`kl_copy_pad`, `kl_pad_frame_h/v`, `kl_init_scene_change`.
 
 TODO (not yet ported): `kl_logic1/kl_logic3`, `kl_calculate_sad` (block-level),
 `kl_init_sad`, `kl_copy_boarder1(_v)`, `kl_RB2B_bilinear_filtered(_with_pad)`,

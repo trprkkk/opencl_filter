@@ -22,3 +22,6 @@ add_test(NAME ktgmc_validation
 add_test(NAME ktgmc_motion_core
          COMMAND ${CMAKE_COMMAND} -E env
                  python3 ${CMAKE_SOURCE_DIR}/python/run_motion_core.py)
+add_test(NAME ktgmc_mv_aux
+         COMMAND ${CMAKE_COMMAND} -E env
+                 python3 ${CMAKE_SOURCE_DIR}/python/run_mv_aux.py)

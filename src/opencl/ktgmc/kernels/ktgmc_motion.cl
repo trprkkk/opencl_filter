@@ -5,10 +5,13 @@
  * The full MV engine (block search, degrain, compensate) additionally depends
  * on the MV.cpp host state machine and the super-frame sub-pel plane layout
  * documented in docs/MV_PORT_SPEC.md.  The kernels below are the pieces that
- * are self-contained enough to transliterate exactly; they are faithful source
- * ports but are marked // RIG-VERIFY until cross-checked on a real OpenCL/CUDA
- * device (see docs/MV_PORT_SPEC.md §7).  They use the same compile-time PX /
- * PX_MAX scheme as ktgmc_simple.cl.
+ * are self-contained enough to transliterate exactly.
+ *
+ * Status legend:
+ *   // ALG-VERIFIED : integer algorithm bit-for-bit cross-checked against an
+ *                     independent CPU mirror + Python golden (make test).
+ *   // RIG-VERIFY   : faithful source port; a real OpenCL/CUDA-device run is
+ *                     still pending (see docs/MV_PORT_SPEC.md §7).
  *
  * Plane conventions follow the original: PX sample type, element pitch
  * (= plane row stride in samples).  For 8-bit the CUDA code used packed
@@ -175,4 +178,110 @@ static int kt_norm_weights(int delta, int binomial, int* WRefB, int* WRefF)
     else if (delta == 2) WSrc = 256-WRefB[0]-WRefF[0]-WRefB[1]-WRefF[1];
     else /* delta == 1 */ WSrc = 256-WRefB[0]-WRefF[0];
     return WSrc;
+}
+
+/* ---------------------------------------------------------------------------
+ * MV array / conversion helpers (MVKernel.cu).  These are the small,
+ * self-contained integer kernels around the block engine.  In OpenCL a VECTOR
+ * (x,y,sad) is passed as an int3 buffer: mv[idx] = (x, y, sad).
+ * -------------------------------------------------------------------------*/
+
+// M6. kl_write_default_mv — initialise every MV to (0,0,verybigSAD).
+//     NOTE: the upstream body does `dst[x].x=0; dst[x].y=0; dst[x].x=verybigSAD;`
+//     (setting .x twice) which is evidently a typo for .sad; we implement the
+//     clearly-intended default so blocks fail the SAD threshold.
+//     ALG-VERIFIED (write to x=0,y=0,sad=verybigSAD)
+kernel void kt_write_default_mv(
+    __global int3* dst, int nBlkCount, int verybigSAD)
+{
+    int x = (int)get_global_id(0);
+    if (x < nBlkCount) {
+        dst[x].x = 0;
+        dst[x].y = 0;
+        dst[x].z = verybigSAD;
+    }
+}
+
+// M7. kl_init_scene_change — zero the per-ref scene-change flags.
+kernel void kt_init_scene_change(
+    __global int* sceneChange)
+{
+    int x = (int)get_global_id(0);
+    sceneChange[x] = 0;
+}
+
+// M8. kl_scene_change — count blocks whose SAD exceeds nTh1 into one scalar.
+//     Final sceneChange == number of blocks with mv[].sad > nTh1 (integer
+//     addition, order-independent).  Host zeroes *sceneChange first.
+//     ALG-VERIFIED
+kernel void kt_scene_change(
+    __global const int3* mv, int nBlks, int nTh1,
+    __global int* sceneChange)
+{
+    int x = (int)get_global_id(0);
+    if (x < nBlks) {
+        if (mv[x].z > nTh1)
+            atomic_add(sceneChange, 1);
+    }
+}
+
+// M9. kl_scene_change_x2 — same for two MV arrays (two separate counts).
+//     ALG-VERIFIED
+kernel void kt_scene_change_x2(
+    __global const int3* mv0, __global const int3* mv1,
+    int nBlks, int nTh1,
+    __global int* sceneChange0, __global int* sceneChange1)
+{
+    int x = (int)get_global_id(0);
+    if (x < nBlks) {
+        if (mv0[x].z > nTh1) atomic_add(sceneChange0, 1);
+        if (mv1[x].z > nTh1) atomic_add(sceneChange1, 1);
+    }
+}
+
+// M10. kl_short_to_byte — convert the accumulated degrain tmp (which carries a
+//      fixed shift) back to a pixel:  out = min(tmp >> shift, max_pixel_value).
+//      CUDA: shift = 5 for 8-bit (tmp is uint16), 5+6=11 for 16-bit (tmp int32).
+//      tmp values are non-negative (weighted sum of non-negative pixels).
+//      ALG-VERIFIED
+kernel void kt_short_to_byte(
+    __global PX* __restrict dst, int dst_pitch,
+    __global const int* __restrict tmp, int tmp_pitch,
+    int width, int height,
+    int shift)
+{
+    int x = (int)get_global_id(0);
+    int y = (int)get_global_id(1);
+    if (x < width && y < height) {
+        int v = tmp[x + y * tmp_pitch] >> shift;
+        if (v > PX_MAX) v = PX_MAX;
+        if (v < 0) v = 0;
+        dst[x + y * dst_pitch] = (PX)v;
+    }
+}
+
+// M11. kl_short_to_byte_or_copy_src — same, but when *pflag is set copy src
+//      instead (the scene-change path: no degrain output).  flag: 1 => convert
+//      tmp, 0 => copy src.  ALG-VERIFIED (identical convert path to M10 plus a
+//      copy branch).
+kernel void kt_short_to_byte_or_copy_src(
+    __global const int* __restrict pflag,      /* 1 = convert tmp, 0 = copy src */
+    __global PX* __restrict dst, int dst_pitch,
+    __global const PX* __restrict src, int src_pitch,
+    __global const int* __restrict tmp, int tmp_pitch,
+    int width, int height,
+    int shift)
+{
+    int x = (int)get_global_id(0);
+    int y = (int)get_global_id(1);
+    if (x < width && y < height) {
+        if (pflag[0] != 0) {
+            int v = tmp[x + y * tmp_pitch] >> shift;
+            if (v > PX_MAX) v = PX_MAX;
+            if (v < 0) v = 0;
+            dst[x + y * dst_pitch] = (PX)v;
+        } else {
+            dst[x + y * dst_pitch] = src[x + y * src_pitch];
+        }
+    }
 }

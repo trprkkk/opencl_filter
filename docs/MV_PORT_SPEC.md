@@ -121,13 +121,18 @@ In `src/opencl/ktgmc/kernels/ktgmc_simple.cl` (bit-for-bit CPU+Python verified,
 `kt_horizontal_wiener`) and `kt_plane_sad` (frame SAD metric) plus the 22
 per-plane KTGMC kernels.
 
-`src/opencl/ktgmc/kernels/ktgmc_motion.cl` (this stage, source port, **RIG-VERIFY**):
-in-place frame padding (`kt_pad_frame_h`, `kt_pad_frame_v`), padded mirror copy
-(`kt_copy_pad`), and the pure scalar degrain weight helpers
-(`kt_degrain_weight`, `kt_norm_weights`) which do not depend on the super-frame
-layout. The weight helpers **are** bit-for-bit verified (CPU + Python, 706
-cases, `make test` → `python/run_motion_core.py`); the padding/copy kernels and
-all search/degrain/compensate kernels remain RIG-VERIFY.
+`src/opencl/ktgmc/kernels/ktgmc_motion.cl` holds the self-contained MV pieces:
+- **ALG-VERIFIED** (CPU + Python golden, `make test`): the degrain weight
+  helpers `kt_degrain_weight`/`kt_norm_weights` (`run_motion_core.py`, 706
+  cases) and the MV-aux integer kernels `kt_write_default_mv`, `kt_scene_change`
+  /`_x2`, `kt_short_to_byte`, `kt_short_to_byte_or_copy_src` (`run_mv_aux.py`,
+  310 cases). Note: upstream `kl_write_default_mv` sets `.x` twice (a typo for
+  `.sad`); we implement the intended default.
+- **RIG-VERIFY** (faithful source ports, device run pending): `kt_copy_pad`,
+  `kt_pad_frame_h`, `kt_pad_frame_v`, `kt_init_scene_change`.
+All search / degrain-block / compensate kernels (block SAD, expanding/hex2
+search, `kl_degrain_2x3`, `kl_compensate_2x3`) still need the MV.cpp host state
+machine and super-frame layout before they can be assembled and validated.
 
 ## 7. Verification plan on a real rig
 

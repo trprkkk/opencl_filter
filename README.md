@@ -80,13 +80,13 @@ Makefile                       # make test  (no OpenCL required)
 
 - `ktgmc_simple.cl`: 25 per-plane KTGMC kernels — **bit-for-bit validated**
   (8/16-bit) via CPU + Python references (`make test` PASS).
-- `ktgmc_motion.cl`: motion / super-sampling kernels — frame padding, mirror
-  copy, and the degrain weight helpers (`kt_degrain_weight`, `kt_norm_weights`,
-  which are bit-for-bit verified). The padding/copy/search/degrain/compensate
-  kernels are faithful source ports marked **RIG-VERIFY** (no OpenCL/CUDA device
-  in this sandbox; see `docs/MV_PORT_SPEC.md` for the on-rig verification plan).
-  The search / degrain / compensate kernels additionally need the MV.cpp host
-  state machine and the super-frame sub-pel layout (documented there).
+- `ktgmc_motion.cl`: motion / super-sampling kernels. **ALG-VERIFIED**: the
+  degrain weight helpers (`kt_degrain_weight`, `kt_norm_weights`) and MV-aux
+  kernels (`kt_write_default_mv`, `kt_scene_change`/`_x2`, `kt_short_to_byte`,
+  `kt_short_to_byte_or_copy_src`). **RIG-VERIFY** (device run pending): frame
+  padding / mirror copy. The search / degrain-block / compensate kernels need
+  the MV.cpp host state machine + super-frame sub-pel layout (see
+  `docs/MV_PORT_SPEC.md`).
 
 ## How the port is validated (no GPU/OpenCL needed)
 

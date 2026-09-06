@@ -161,7 +161,9 @@ machine and super-frame layout before they can be assembled and validated.
 3. Add a host runner that applies each kernel to raw planes and diffs against the
    existing `sim/ktgmc_cpu_ref.cpp` output (the same vectors already used by
    `python/run_validation.py`). This validates every kernel not tied to the MV
-   search data model.
+   search data model. See `docs/HOST_CONTRACT.md` for the exact program builds,
+   kernel→grid maps, argument order and — importantly — the `int2`/`int3` host
+   buffer-layout probe to run before exercising the MV kernels.
 4. For the search/degrain/compensate kernels, build the `MV.cpp` host state
    machine (predictors, meander, level loop) and compare `VECTOR` arrays + output
    frames against the CUDA build of `AviSynthCUDAFilters` on identical inputs

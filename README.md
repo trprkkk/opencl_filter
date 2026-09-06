@@ -70,6 +70,7 @@ full kernel-by-kernel roadmap and how to extend the set.
 ```
 docs/PORT_PLAN.md              # port strategy + per-kernel roadmap + licensing
 docs/MV_PORT_SPEC.md           # motion-engine data model + kernel inventory + rig test plan
+docs/HOST_CONTRACT.md          # on-rig OpenCL host runner spec (builds, grids, buffer layout)
 src/opencl/ktgmc/kernels/      # OpenCL kernel sources (.cl)
 sim/ktgmc_cpu_ref.cpp          # scalar CPU mirror of the kernels (validates logic)
 python/run_validation.py       # independent Python golden + cross-check harness

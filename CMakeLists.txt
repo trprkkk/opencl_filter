@@ -9,11 +9,18 @@ set_target_properties(ktgmc_cpu_ref PROPERTIES CXX_STANDARD 17)
 # Only configured when an OpenCL implementation is available (find_package
 # finds the headers + loader from e.g. ocl-icd-opencl-dev / pocl-opencl-icd).
 # This sandbox has none, so the target is skipped by default.
-# find_package(OpenCL QUIET)
-# if(OpenCL_FOUND)
-#   add_executable(ktgmc_opencl_host src/host/run_opencl.cpp)
-#   target_link_libraries(ktgmc_opencl_host PRIVATE OpenCL::OpenCL)
-# endif()
+find_package(OpenCL QUIET)
+if(OpenCL_FOUND)
+  add_executable(ktgmc_opencl_host src/host/run_opencl.cpp)
+  target_link_libraries(ktgmc_opencl_host PRIVATE OpenCL::OpenCL)
+  set_target_properties(ktgmc_opencl_host PROPERTIES CXX_STANDARD 17)
+  # Bring-up smoke test: builds both .cl at both PX instantiations on a rig.
+  # (Needs a device ICD; not run in CI here.)
+  add_test(NAME ktgmc_cl_smoke
+           COMMAND ktgmc_opencl_host
+                   ${CMAKE_SOURCE_DIR}/src/opencl/ktgmc/kernels/ktgmc_simple.cl
+                   ${CMAKE_SOURCE_DIR}/src/opencl/ktgmc/kernels/ktgmc_motion.cl)
+endif()
 
 enable_testing()
 add_test(NAME ktgmc_validation

@@ -92,13 +92,17 @@ scalar `sum |a-b|` which is validated here. Wiring it into the temporal-soften
 as scalar per-frame flags `scN` here; wiring the full SAD-based
 `kl_calculate_sad` reduction is part of the motion stage.
 
-TODO (not yet ported): `kl_logic1/kl_logic3`, `kl_calculate_sad` (+block
-reduce), `kl_init_sad`, `kl_copy_boarder1(_v)`, `kl_copy_pad`, `kl_pad_frame_h/v`,
-`kl_RB2B_bilinear_filtered(_with_pad)`, and all of the motion-search /
-compensation layers (`Search`, `kl_degrain_2x3`, `kl_compensate_2x3`,
-`kl_scene_change*`, MV vector plumbing in `MV.cpp`). `GaussianFilter`
-(KGaussResize) is already implemented as a second `ResamplingFunction` in the
-reference; add its `.cl` variants next.
+Motion / super-sampling kernels now live in `src/opencl/ktgmc/kernels/ktgmc_motion.cl`
+(see `docs/MV_PORT_SPEC.md`). Validated: the degrain weight helpers
+(`dev_degrain_weight`, `dev_norm_weights`). Source-ported (RIG-VERIFY):
+`kl_copy_pad`, `kl_pad_frame_h/v`.
+
+TODO (not yet ported): `kl_logic1/kl_logic3`, `kl_calculate_sad` (block-level),
+`kl_init_sad`, `kl_copy_boarder1(_v)`, `kl_RB2B_bilinear_filtered(_with_pad)`,
+the block-search kernels (`Search`, expanding/hex2), `kl_degrain_2x3`,
+`kl_compensate_2x3`, `kl_scene_change*`, `kl_write_default_mv`, and the MV.cpp
+host state machine. `GaussianFilter` (KGaussResize) is already implemented as a
+second `ResamplingFunction` in the reference; add its `.cl` variants next.
 
 ## 4. Motion-compensation stages (the big remaining work)
 

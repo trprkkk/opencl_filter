@@ -99,3 +99,80 @@ kernel void kt_pad_frame_v(
                 ptr[x + (vPad + height - 1) * pitch];
     }
 }
+
+/* ---------------------------------------------------------------------------
+ * Degrain numeric core (from AviSynthCUDAFilters/KTGMC/MVKernel.cu:
+ * dev_degrain_weight + dev_norm_weights).  Pure scalar helpers used by the
+ * degrain block kernels; validated against the CPU/Python references.
+ * The CUDA originals are template functions on (N/delta, binomial); here the
+ * ref arrays are fixed size (<=6) and delta/binomial are runtime params,
+ * which reproduces the identical integer arithmetic for delta 1..6.
+ * -------------------------------------------------------------------------*/
+
+// M4. dev_degrain_weight
+static int kt_degrain_weight(int thSAD, int blockSAD)
+{
+    if (thSAD <= blockSAD)
+        return 0;
+    float sq_thSAD    = (float)thSAD * (float)thSAD;
+    float sq_blockSAD = (float)blockSAD * (float)blockSAD;
+    return (int)(256.0f * (sq_thSAD - sq_blockSAD) / (sq_thSAD + sq_blockSAD));
+}
+
+// M5. dev_norm_weights(delta, binomial).  WRefB/WRefF have >= delta entries.
+//     Returns normalized WSrc (in/out refs scaled so they sum with WSrc to 256).
+static int kt_norm_weights(int delta, int binomial, int* WRefB, int* WRefF)
+{
+    int WSrc = 256;
+    if (binomial) {
+        if (delta == 1) {
+            WSrc *= 2;
+        } else if (delta == 2) {
+            WSrc *= 6;
+            WRefB[0] *= 4; WRefF[0] *= 4;
+        } else if (delta == 3) {
+            WSrc *= 20;
+            WRefB[0] *= 15; WRefF[0] *= 15;
+            WRefB[1] *= 6;  WRefF[1] *= 6;
+        } else if (delta == 4) {
+            WSrc *= 70;
+            WRefB[0] *= 56; WRefF[0] *= 56;
+            WRefB[1] *= 28; WRefF[1] *= 28;
+            WRefB[2] *= 8;  WRefF[2] *= 8;
+        }
+    }
+    int WSum;
+    if (delta == 6)
+        WSum = WRefB[0]+WRefF[0]+WSrc+WRefB[1]+WRefF[1]+WRefB[2]+WRefF[2]
+             +WRefB[3]+WRefF[3]+WRefB[4]+WRefF[4]+WRefB[5]+WRefF[5]+1;
+    else if (delta == 5)
+        WSum = WRefB[0]+WRefF[0]+WSrc+WRefB[1]+WRefF[1]+WRefB[2]+WRefF[2]
+             +WRefB[3]+WRefF[3]+WRefB[4]+WRefF[4]+1;
+    else if (delta == 4)
+        WSum = WRefB[0]+WRefF[0]+WSrc+WRefB[1]+WRefF[1]+WRefB[2]+WRefF[2]
+             +WRefB[3]+WRefF[3]+1;
+    else if (delta == 3)
+        WSum = WRefB[0]+WRefF[0]+WSrc+WRefB[1]+WRefF[1]+WRefB[2]+WRefF[2]+1;
+    else if (delta == 2)
+        WSum = WRefB[0]+WRefF[0]+WSrc+WRefB[1]+WRefF[1]+1;
+    else /* delta == 1 */
+        WSum = WRefB[0]+WRefF[0]+WSrc+1;
+
+    WRefB[0] = WRefB[0]*256/WSum; WRefF[0] = WRefF[0]*256/WSum;
+    if (delta >= 2) { WRefB[1] = WRefB[1]*256/WSum; WRefF[1] = WRefF[1]*256/WSum; }
+    if (delta >= 3) { WRefB[2] = WRefB[2]*256/WSum; WRefF[2] = WRefF[2]*256/WSum; }
+    if (delta >= 4) { WRefB[3] = WRefB[3]*256/WSum; WRefF[3] = WRefF[3]*256/WSum; }
+    if (delta >= 5) { WRefB[4] = WRefB[4]*256/WSum; WRefF[4] = WRefF[4]*256/WSum; }
+    if (delta >= 6) { WRefB[5] = WRefB[5]*256/WSum; WRefF[5] = WRefF[5]*256/WSum; }
+
+    if (delta == 6) WSrc = 256-WRefB[0]-WRefF[0]-WRefB[1]-WRefF[1]-WRefB[2]-WRefF[2]
+                            -WRefB[3]-WRefF[3]-WRefB[4]-WRefF[4]-WRefB[5]-WRefF[5];
+    else if (delta == 5) WSrc = 256-WRefB[0]-WRefF[0]-WRefB[1]-WRefF[1]-WRefB[2]-WRefF[2]
+                            -WRefB[3]-WRefF[3]-WRefB[4]-WRefF[4];
+    else if (delta == 4) WSrc = 256-WRefB[0]-WRefF[0]-WRefB[1]-WRefF[1]-WRefB[2]-WRefF[2]
+                            -WRefB[3]-WRefF[3];
+    else if (delta == 3) WSrc = 256-WRefB[0]-WRefF[0]-WRefB[1]-WRefF[1]-WRefB[2]-WRefF[2];
+    else if (delta == 2) WSrc = 256-WRefB[0]-WRefF[0]-WRefB[1]-WRefF[1];
+    else /* delta == 1 */ WSrc = 256-WRefB[0]-WRefF[0];
+    return WSrc;
+}

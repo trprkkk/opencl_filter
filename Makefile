@@ -14,6 +14,7 @@ ref:
 
 test: ref
 	python3 python/run_validation.py
+	python3 python/run_motion_core.py
 
 clean:
 	rm -rf build

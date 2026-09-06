@@ -123,9 +123,11 @@ per-plane KTGMC kernels.
 
 `src/opencl/ktgmc/kernels/ktgmc_motion.cl` (this stage, source port, **RIG-VERIFY**):
 in-place frame padding (`kt_pad_frame_h`, `kt_pad_frame_v`), padded mirror copy
-(`kt_copy_pad`), and the pure scalar weight/denoise helpers
+(`kt_copy_pad`), and the pure scalar degrain weight helpers
 (`kt_degrain_weight`, `kt_norm_weights`) which do not depend on the super-frame
-layout and can be validated standalone.
+layout. The weight helpers **are** bit-for-bit verified (CPU + Python, 706
+cases, `make test` → `python/run_motion_core.py`); the padding/copy kernels and
+all search/degrain/compensate kernels remain RIG-VERIFY.
 
 ## 7. Verification plan on a real rig
 

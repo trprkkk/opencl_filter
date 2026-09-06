@@ -153,9 +153,34 @@ per-plane KTGMC kernels.
   simulation); when several values tie for the mode, CUDA's winner is an
   artifact of its 1024-thread reduction tree and is not reproduced — reconcile
   on the rig only if bit-exact tie output is required.
-All search / degrain-block / compensate kernels (block SAD, expanding/hex2
-search, `kl_degrain_2x3`, `kl_compensate_2x3`) still need the MV.cpp host state
-machine and super-frame layout before they can be assembled and validated.
+All remaining kernels are **not** independently dispatchable/verifiable in this
+sandbox because their inputs come from the `SearchBatchData` super-frame host
+struct (built by the `MV.cpp` host state machine) and/or use warp/block
+reduction geometry. Concretely, the unported set splits into:
+
+- **Self-contained once the super-frame planes + MV arrays exist** (portable to a
+  rig and diff-able against a CPU mirror of the block math): `kl_calc_all_sad`
+  (per-block SAD of source block vs. the MV-pointed ref block incl. `NPEL`
+  sub-pel plane offset via `dev_get_ref_block`), and the device-side SAD helper
+  `dev_calc_sad` / `dev_check_mv` / `dev_clip_mv` / `dev_sq_norm`.
+- **Intrinsic to the warp/block `Search` driver** (only meaningful inside the
+  block kernel; cannot be validated standalone): `Search`, `dev_read_pixels`,
+  `dev_expanding_search_1/2`, `dev_hex2_search_1`, `MinCost`,
+  `dev_reduce_result`, `load4pix(_Aligned)`, and `kl_prepare_search`'s consumer
+  loop.
+- **Degrain / compensate block kernels** (need `DegrainBlockData`/`ArgData`
+  super-frame pointers + MV arrays): `kl_prepare_degrain`, `kl_degrain_2x3`,
+  `kl_prepare_compensate`, `kl_compensate_2x3`, `kl_load_mv_batch`.
+- **Separate KTGMC temporal-filter path** (Kernel.cu, not MV): `kl_init_sad`,
+  `kl_calculate_sad`, `kl_copy_boarder1(_v)`, `kl_logic1/2/3`, `kl_box3_v`,
+  `kl_box5_v_and_border`, `kl_binomial_temporal_soften_1/2` — several use packed
+  `vpixel_t`/`__vabsdiff4` or float `atomicAdd` reductions whose output ordering
+  is not bit-deterministic, so they are ported scalar / as flags only.
+
+So the isolated, per-output deterministic MV kernels are complete
+(17 + 25 in the two `.cl` files). Finishing KTGMC from here means assembling the
+`SearchBatchData` + super-frame layout on a real rig (see `docs/HOST_CONTRACT.md`)
+and then porting/validating the groups above there.
 
 ## 7. Verification plan on a real rig
 

@@ -1,0 +1,126 @@
+# Port plan — KTGMC (and beyond) from CUDA → OpenCL
+
+This document is the engineering map for porting
+[`rigaya/AviSynthCUDAFilters`](https://github.com/rigaya/AviSynthCUDAFilters)
+(→ `nekopanda/AviSynthCUDAFilters`) to OpenCL. It records the verified source
+inventory, the chosen strategy, per-kernel status, and how to extend the repo.
+
+## 1. Source inventory (verified from `master`)
+
+KTGMC is split into three CUDA files plus AVS glue:
+
+| File | Lines | Contents |
+|---|---|---|
+| `KTGMC/Kernel.cu` | ~3560 | **27** `__global__` kernels: the per-plane/no-MV pixel kernels **and** all the AviSynth `KTGMC_*`/`K*` filter classes (`KTGMC_Bob`, `KBinomialTemporalSoften`, `KRemoveGrain`, `KRepair`, `KVerticalCleaner`, `KGaussResize`, masktools-style `KMakeDiff/KAddDiff/KLogic/KMerge`, `KXpand/Expand`, bob shimmer fixes, VResharpen/Resharpen, LimitOverSharpen, ToFullRange, TweakSearchClip, LosslessProc, ErrorAdjust, `KDoubleWeave/KWeave`, `KCopy`, and the `ResamplingFunction`/`ResamplingProgram` framework). Registers 25 AVS functions. |
+| `KTGMC/MVKernel.cu` | ~3540 | **44** device functions/kernels for motion estimation: `KMSuper` (super-sampled pyramid), `KMAnalyse` (SAD, block search, MV vector prediction/refinement, scene-change), and `KMCompensate` motion compensation. |
+| `KTGMC/MV.cpp` | ~5550 | Host pipeline + `KMSuper`/`KMAnalyse`/`KMDegrain1/2`/`KMCompensate` classes + AVS registration. This is a port of AviSynth `mvtools` to CUDA. |
+
+Other suite projects (next milestones after KTGMC): `KNNEDI3` (neural-net
+upscaler), `KFM` (KDeband, Deblock, CombingAnalyze, DecombeUCF, MergeStatic…),
+`AvsCUDA` (AviSynthNeo CUDA plumbing), `GRunT`, `masktools`.
+
+## 2. Strategy
+
+1. **Per-pixel separable kernels first.** Most `Kernel.cu` kernels process a
+   plane pixel-by-pixel (or 4 pixels per CUDA thread via `uchar4`/`ushort4`).
+   Each output element is an *independent* dot/point/sort operation that never
+   reads a sibling channel, so a **scalar translation is bit-identical**. This is
+   exactly what Milestone 1 does. Vectorization is a later, pure-performance pass.
+2. **Double implementation for correctness.** Every kernel exists as (a) a scalar
+   OpenCL `.cl` and (b) a scalar CPU mirror. An independent Python golden is the
+   third, cross-language check. `make test` runs CPU-vs-Python bit-for-bit.
+3. **Reuse QSVEnc's OpenCL idioms.** `rigaya/QSVEnc/QSVPipeline/rgy_filter_*.cl`
+   (e.g. the OpenCL `--vpp-kfm`, `--vpp-degrain` filters) show the house style:
+   `rgy_CL*` buffer/host helpers, `#pragma` / build-option handling, and the
+   kernel-source-as-string approach. Mirror that for a drop-in feel.
+4. **Host glue separated from kernels.** The AviSynth host adaptation and the
+   motion-vector pipeline are ported separately from the pixel kernels, so each
+   milestone is independently testable without AviSynth.
+
+### Precision rules preserved from CUDA (do not "fix")
+- Resample accumulates in `float` (CUDA) — scalar CPU reference uses `double`
+  only because that is the *algorithm*; the `.cl` resampler uses `float` to match
+  real CUDA bit behaviour. All other kernels are integer-exact.
+- Rounding is always `clamp(x, 0, maxval)` then `+0.5` before truncation
+  (`(int)(x + 0.5)`), matching CUDA `cast_to(x + 0.5f)`.
+- Pixel range: `maxval = 255` (8-bit) or `65535` (16-bit); plane `ComponentSize`
+  selects the kernel instantiation, exactly like the `switch (pixelSize)` in the
+  CUDA `Proc()` templates.
+- Fixed point: `KMerge` uses `(w*32767.0f)` → `32767` scale, `>>15`.
+- `MakeDiff`: `a-b+range_half`, `range_half = 1 << (bits-1)`.
+
+## 3. Milestone status map (Kernel.cu simple kernels)
+
+`src/opencl/ktgmc/kernels/ktgmc_simple.cl` currently contains (✔ = validated
+bit-for-bit via `make test`):
+
+| CUDA kernel (Kernel.cu) | OpenCL | Status |
+|---|---|---|
+| `kl_resample_v` + `ResamplingFunction`/`Program` | `kt_resample_v` | ✔ |
+| `kl_makediff` (`MakeDiffOp`) | `kt_makediff mode 0` | ✔ |
+| `kl_makediff` (`AddDiffOp`) | `kt_makediff mode 1` | ✔ |
+| `kl_box3x3_filter` RG11/RG20 | `kt_rg_box3x3` | ✔ |
+| `kl_rg_clip` N=1..4 | `kt_removegrain_clip` | ✔ |
+| `kl_repair_clip` N=1..4 | `kt_repair_clip` | ✔ |
+| `kl_vertical_cleaner_median` | `kt_vertical_cleaner_median` | ✔ |
+| `kl_to_full_range` (Y / UV) | `kt_to_full_range` | ✔ |
+| `kl_merge` | `kt_merge` | ✔ |
+| `kl_elementwise` / `kl_copy` | trivial | easy next |
+| `kl_resample_h` (GaussResize horizontal) | — | TODO |
+| `kl_box5_v_and_border` (Min5/Max5, Xpand/Expand ×2) | — | TODO |
+| `kl_logic1/2/3`, `kl_box3_v`(Resharpen), `kl_resharpen` | — | TODO |
+| `kl_limit_over_sharpen`, `kl_bobshimmerfixes_merge` | — | TODO |
+| `kl_tweak_search_clip`, `kl_error_adjust`, `kl_lossless_proc` | — | TODO |
+| `kl_binomial_temporal_soften_1/2` (needs SAD reduce) | — | TODO |
+| `kl_calculate_sad` (+block reduce) | — | TODO |
+| `kl_weave` (KDoubleWeave) | — | TODO |
+| `kl_copy_boarder1(_v)`, `kl_copy_pad`, `kl_pad_frame_h/v` | — | TODO |
+
+`GaussianFilter` (KGaussResize) is already written as a second `ResamplingFunction`
+in the reference; add its `.cl` variants next.
+
+## 4. Motion-compensation stages (the big remaining work)
+
+To get a working deinterlacer you must port the mvtools-equivalent layers:
+
+1. **Super sampling** (`KMSuper`, `MVKernel.cu`): separable upscale to 4× pel,
+   levels pyramid.
+2. **Analysis** (`KMAnalyse`, `kl_calculate_sad`, block search, temporal/vector
+   prediction, scene-change detection, `dev_reduce` block reductions → OpenCL
+   `barrier`/local reduce).
+3. **Compensation / Degrain** (`KMCompensate`, `kl_compensate_2x3`,
+   `kl_degrain_2x3`, `kl_prepare_*`).
+4. **Assembly** — the QTGMC AVS script wires individual `KTGMC_*`/`K*` filters
+   (Bob → … → Repair/Resharpen → weave). The AviSynth graph lives on the host
+   side and is device-independent once each leaf filter runs on OpenCL.
+
+## 5. Beyond KTGMC
+
+- **KNNEDI3**: self-contained neural-net 2× scaler; medium-large.
+- **KFM**: pick smallest filter first (KDeband) to prove the plumbing, then the
+  rest. KFM is MIT → cleanest to reuse/redistribute.
+
+## 6. AviSynth integration (device glue)
+
+Real plugins need AviSynthNeo host code. That layer (frame `GetFrame`, plane
+pitch/read/write pointers, `RegisterFunction`) is **separate** from the kernels
+and must be written/run where AviSynthNeo exists (Windows, or Linux AviSynth+).
+The kernels here are pure `plane → plane` operations so they can be unit-tested
+with no AviSynth. When wiring up, follow the original classes' plane loop
+(`PLANAR_Y/U/V`, `uvSamePitch` short-circuit, `logUVx/logUVy` subsampling).
+
+## 7. Licensing
+
+KTGMC-derived files follow the upstream **GPL** (per
+`AviSynthCUDAFilters` README); KFM-derived files are **MIT**. Keep provenance
+per file/directory. Nothing in this repo should be released without matching the
+upstream license of the code it derives from.
+
+## 8. Validation runner details
+
+- `python/run_validation.py` generates deterministic raw planes (8 & 16 bit),
+  computes the Python golden, builds `sim/ktgmc_cpu_ref.cpp`, runs it, and
+  compares every output **and** the resampling-program `offset`/`coef` tables
+  bit-for-bit.
+- Add a new kernel by: implement it in `ktgmc_simple.cl`, mirror it in
+  `sim/ktgmc_cpu_ref.cpp`, add the Python golden + a comparison entry.

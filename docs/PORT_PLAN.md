@@ -109,12 +109,22 @@ pure helpers `dev_clip_mv`/`dev_check_mv`/`dev_sq_norm`/`dev_get_ref_block`,
 and the first block-level kernel `kl_calc_all_sad` (per-block SAD vs the
 MV-selected ref block; host model in `docs/BLOCKSEARCH_MODEL.md`).
 
-TODO (not yet ported): `kl_logic1/kl_logic3`, `kl_calculate_sad` (block-level),
-`kl_init_sad`, `kl_copy_boarder1(_v)`, `kl_RB2B_bilinear_filtered_with_pad`,
-the block-search kernels (`Search`, expanding/hex2), `kl_degrain_2x3`,
-`kl_compensate_2x3`, `kl_scene_change*`, `kl_write_default_mv`, and the MV.cpp
-host state machine. `GaussianFilter` (KGaussResize) is already implemented as a
-second `ResamplingFunction` in the reference; add its `.cl` variants next.
+TODO (not yet ported): `kl_RB2B_bilinear_filtered_with_pad` (direct variant),
+the block-search driver kernels (`Search`, expanding/hex2, `dev_read_pixels`,
+`dev_calc_sad`, `MinCost`, `dev_reduce_result`), `kl_degrain_2x3`,
+`kl_compensate_2x3`, `kl_prepare_degrain/compensate`, `kl_load_mv_batch`, and
+the MV.cpp host state machine (see `docs/BLOCKSEARCH_MODEL.md` §8 for the exact
+items that block these).
+
+The `Kernel.cu` no-motion AVS filter-function kernels are all covered by
+`ktgmc_simple.cl` already. Of the extra names there, `kl_logic1`/`kl_logic3`
+(KLogic1/KLogic3) are never instantiated, `kl_copy_boarder1` has no caller and
+`kl_copy_boarder1_v` is inside `#if 0`, and `kl_init_sad`/`kl_calculate_sad`
+(the temporal-soften scene-change SAD) map to the scalar `kt_plane_sad` plus a
+host-side threshold compare — so none of them needs a new kernel.
+
+`GaussianFilter` (KGaussResize) is already implemented as a second
+`ResamplingFunction` in the reference; add its `.cl` variants next.
 
 ## 4. Motion-compensation stages (the big remaining work)
 

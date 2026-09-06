@@ -152,15 +152,21 @@ machine and super-frame layout before they can be assembled and validated.
 1. Bring up an OpenCL build (see top-level CMakeLists `OpenCL::OpenCL` block;
    install `ocl-icd-opencl-dev` + a device, e.g. `pocl-opencl-icd` or vendor
    runtime) and compile `ktgmc_simple.cl`/`ktgmc_motion.cl`.
-2. Add a host runner that applies each kernel to raw planes and diffs against
-   the existing `sim/ktgmc_cpu_ref.cpp` output (the same vectors already used by
+2. First run `make lint` (or CTest `ktgmc_cl_lint`): it does a genuine C parse of
+   every `.cl` through `lint/oc_shim.h` to catch structural/typo errors. gcc does
+   NOT parse a `.cl` file on its own (it treats it as a linker input), so the
+   script copies each source to `.c` and uses `-x c`. The shim only emulates
+   syntax (vector `.x/.y` members, work-item ids, `atomic_add`, scalar builtins),
+   not OpenCL semantics.
+3. Add a host runner that applies each kernel to raw planes and diffs against the
+   existing `sim/ktgmc_cpu_ref.cpp` output (the same vectors already used by
    `python/run_validation.py`). This validates every kernel not tied to the MV
    search data model.
-3. For the search/degrain/compensate kernels, build the `MV.cpp` host state
+4. For the search/degrain/compensate kernels, build the `MV.cpp` host state
    machine (predictors, meander, level loop) and compare `VECTOR` arrays + output
    frames against the CUDA build of `AviSynthCUDAFilters` on identical inputs
    (or against `mvtools` output where the parameterization matches).
-4. Remove each `RIG-VERIFY` marker as its test passes.
+5. Remove each `RIG-VERIFY` marker as its test passes.
 
 ## 8. Licensing
 

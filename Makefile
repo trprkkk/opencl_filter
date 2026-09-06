@@ -4,15 +4,18 @@ CXXFLAGS := -O2 -std=c++17 -Wall
 
 REF_BIN := build/ktgmc_cpu_ref
 
-.PHONY: all test ref clean
+.PHONY: all test lint ref clean
 
-all: test
+all: test lint
+
+lint:
+	./lint/lint_opencl.sh
 
 ref:
 	mkdir -p build
 	$(CXX) $(CXXFLAGS) -w sim/ktgmc_cpu_ref.cpp -o $(REF_BIN)
 
-test: ref
+test: ref lint
 	python3 python/run_validation.py
 	python3 python/run_motion_core.py
 	python3 python/run_mv_aux.py

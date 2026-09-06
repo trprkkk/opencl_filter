@@ -109,8 +109,14 @@ path). On any machine with an OpenCL ICD you can additionally compile/run the
 `.cl` and diff against the CPU mirror.
 
 ```sh
-make test        # builds the CPU ref and runs the 8-bit + 16-bit cross-checks
+make test        # structural .cl lint + CPU-ref + 8/16-bit + motion cross-checks
 ```
+
+`make test` also runs `make lint`, which does a *genuine* C parse of every
+`.cl` (gcc does not parse `.cl` files by themselves — they are copied to `.c`
+and parsed through `lint/oc_shim.h`) to catch syntax/typo errors before the
+rig's OpenCL compiler is available. This is a structural check only; real
+OpenCL semantics are validated on a device.
 
 Expected output:
 

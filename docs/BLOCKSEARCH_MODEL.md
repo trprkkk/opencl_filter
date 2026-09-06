@@ -153,3 +153,36 @@ then writes the winning `short2` back to `vectors[blky*nBlkX+blkx]`, fences, and
 sets `prog[blkx]=blky` for the ANALYZE_SYNC=1 dependency wait. Porting this is
 the remaining large work and is strictly `RIG-VERIFY` (device-dependent for
 validation, but deterministic under CPU_EMU=true).
+
+## 8. What is captured vs. what still blocks a faithful `kl_search`
+
+Captured faithfully (transliteratable): the pure helpers (§5), the per-block
+cost/SAD/expanding-refine arithmetic, the predictor-setup ordering, and the
+`CPU_EMU=true` deterministic reduce semantics.
+
+NOT resolvable without the MV.cpp host assembly (so a blind port would be
+unverifiable and risky to claim "complete"):
+1. **Exact multi-row `vectors[]` layout** tying `blkIdx = blky*nBlkX+blkx` to
+   the per-row sentinels (`[-2]/[-1]`) and the appended copy region
+   (`+nBlkX*nBlkY`) for arbitrary `nBlkY` rows and `vectorsPitch`. The predictor
+   slot values (`REF_VECTOR_INDEX[0..5]` = data[4..9]) dereference this array,
+   so resolving `median(left,up,bottom-right)` and the own/left/up MVs depends on
+   it. §2 assumed a row==grid, but a multi-row per-batch search needs the exact
+   host stride/offset convention from MV.cpp's launcher.
+2. **Reference (super-frame) plane origin**: `dev_get_ref_block` is given a
+   pointer already advanced to the block top-left (`&plane[offx+offy*nPitch]`),
+   and the block SAD then reads the BLK_SIZE×BLK_SIZE source window from a
+   shared tile at row stride BLK_SIZE while reading the ref window at stride
+   `nPitch`. The exact source-tile→ref alignment (does the ref window start at
+   the same offx,offy as the source block, plus the NPEL sub-plane offset?) must
+   be confirmed from `MV.cpp`'s plane construction before the SAD is correct.
+3. **Batch / work-stealing mapping to OpenCL**: CUDA launches one block per
+   batch column (`blocks(batch, min(nBlkX,nBlkY))`) that work-steals columns via
+   a shared `next` counter and spin-waits on `prog[]` for the ANALYZE_SYNC=1
+   left-column dependency. Reproducing this needs an OpenCL host that either
+   serialises columns in dependency order or emulates the spin/atomic handshake
+   — a host-side decision, not a kernel transliteration.
+
+These three items are the concrete on-rig tasks to finish `kl_search`; they are
+all host/layout questions that a device bring-up (docs/HOST_CONTRACT.md) will
+answer empirically.

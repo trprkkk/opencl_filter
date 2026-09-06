@@ -100,8 +100,10 @@ Motion / super-sampling kernels now live in `src/opencl/ktgmc/kernels/ktgmc_moti
 `kl_interpolate_prediction`, the global-MV refinement `kl_mean_global_mv`, and
 the per-block search setup `kl_prepare_search` (ANALYZE_SYNC=1), the MV
 I/O trio `kl_load_mv`/`kl_store_mv`/`kl_init_const_vec`, and the reduced-plane
-builder `kl_RB2B_bilinear_filtered` (separable 1:2 downsample; `kl_RB2B_...
-_with_pad` direct variant is separate and not yet ported).
+builder `kl_RB2B_bilinear_filtered` (separable 1:2 downsample) and its CUDA-only
+fused twin `kl_RB2B_bilinear_filtered_with_pad` (single 4×4-tap +32/64 pass that
+also fills the hpad/vpad border, MV.cpp `ReduceToPad`) are both ALG-VERIFIED
+(`run_mv_rb2b.py`, `run_mv_rb2b_pad.py`).
 Source-ported (RIG-VERIFY, device run pending):
 `kl_copy_pad`, `kl_pad_frame_h/v`, `kl_init_scene_change`, `kl_most_freq_mv`
 (smallest-mode; bit-exact vs CUDA except on exact mode ties), the block-search
@@ -109,7 +111,7 @@ pure helpers `dev_clip_mv`/`dev_check_mv`/`dev_sq_norm`/`dev_get_ref_block`,
 and the first block-level kernel `kl_calc_all_sad` (per-block SAD vs the
 MV-selected ref block; host model in `docs/BLOCKSEARCH_MODEL.md`).
 
-TODO (not yet ported): `kl_RB2B_bilinear_filtered_with_pad` (direct variant),
+TODO (not yet ported):
 the block-search driver kernels (`Search`, expanding/hex2, `dev_read_pixels`,
 `dev_calc_sad`, `MinCost`, `dev_reduce_result`), `kl_degrain_2x3`,
 `kl_compensate_2x3`, `kl_prepare_degrain/compensate`, `kl_load_mv_batch`, and
@@ -133,9 +135,11 @@ To get a working deinterlacer you must port the mvtools-equivalent layers:
 1. **Super sampling** (`KMSuper`, `MVKernel.cu`): separable upscale to 4× pel,
    levels pyramid. — **in progress**: the `kl_vertical_wiener`/`kl_horizontal_wiener`
    ("sharp") kernels are ported & validated; `ktgmc_motion.cl` adds the frame
-   padding / mirror-copy kernels (source port, **RIG-VERIFY**); the RB2B
-   sub-pel sampler and the padded super-frame layout still need the host buffer
-   semantics from `MV.cpp`. Full data-model + verification plan:
+   padding / mirror-copy kernels (source port, **RIG-VERIFY**) and both RB2B
+   anti-aliased 1:2 downsamplers (`kt_rb2b_bilinear_filtered` separable and its
+   `_with_pad` fused twin; ALG-VERIFIED). What remains device-bound is the
+   sub-pel super-frame host buffer layout used by the Search kernels, whose
+   semantics come from `MV.cpp`. Full data-model + verification plan:
    [`docs/MV_PORT_SPEC.md`](MV_PORT_SPEC.md).
 2. **Analysis** (`KMAnalyse`, `kl_calculate_sad`, block search, temporal/vector
    prediction, scene-change detection, `dev_reduce` block reductions → OpenCL

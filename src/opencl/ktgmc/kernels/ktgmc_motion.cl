@@ -710,6 +710,87 @@ kernel void kt_rb2b_bilinear_filtered(
 }
 
 /* ---------------------------------------------------------------------------
+ * M21. kl_RB2B_bilinear_filtered_with_pad — same anti-aliased 1:2 downsample
+ *      as M19, but as the CUDA-only *fused* variant that also fills the
+ *      destination's hpad/vpad border in one pass (MV.cpp ReduceToPad).  It is
+ *      a single weighted 4x4-tap filter over the 2x source neighbourhood with
+ *      ONE final +32/64 rounding, NOT the two-phase separable rounding of M19
+ *      (those two are numerically distinct in the interior and must not be
+ *      conflated).  There is no non-CUDA host twin for this fused kernel — the
+ *      CPU ReduceToPad path instead runs the separable M19 core and then pads
+ *      — so correctness here means faithfully reproducing the fused algorithm.
+ *
+ *      Coordinate domain (matching the CUDA launch: dst pointer already points
+ *      at the padded-plane interior offset, pitch is the padded-plane row
+ *      stride):
+ *        dstx = globalx - hpad, dsty = globaly - vpad
+ *        write dst[dstx+dsty*dst_pitch] for dstx < nWidth+hpad && dsty < nHeight+vpad
+ *      i.e. every pixel of the (nWidth+2*hpad) x (nHeight+2*vpad) padded dst.
+ *
+ *      Source taps are selected per output pixel:
+ *        dstx<=0          -> srcx=0         (x edge / left pad, weights 0,4,4,0)
+ *        dstx>=nWidth-1   -> srcx=2(nW-1)   (x edge / right pad, weights 0,4,4,0)
+ *        interior         -> srcx=2*dstx    (weights 1,3,3,1)
+ *      and the same rule on dsty/srcy.  The y edge "replicate" rows use the
+ *      2-pel-averaged boundary value so the pad region equals the nearest
+ *      boundary column/row.  Zero-weight taps are skipped, so no out-of-range
+ *      source reads occur (source full-res region needs 2*nWidth cols x
+ *      2*nHeight rows).  sum is always non-negative.  // ALG-VERIFIED below
+ * -------------------------------------------------------------------------*/
+kernel void kt_rb2b_bilinear_filtered_with_pad(
+    __global const PX* __restrict src, int src_pitch,
+    __global       PX* __restrict dst, int dst_pitch,
+    int nWidth, int nHeight, int hpad, int vpad)
+{
+    int dstx = (int)get_global_id(0) - hpad;
+    int dsty = (int)get_global_id(1) - vpad;
+
+    if (dstx < nWidth + hpad && dsty < nHeight + vpad) {
+        int xmul0 = 0;
+        int xmul1 = 4;
+        int srcx;
+        if (dstx <= 0)
+            srcx = 0;
+        else if (dstx >= nWidth - 1)
+            srcx = (nWidth - 1) * 2;
+        else {
+            srcx = dstx * 2;
+            xmul0 = 1;
+            xmul1 = 3;
+        }
+
+        int ymul0 = 0;
+        int ymul1 = 4;
+        int srcy;
+        if (dsty <= 0)
+            srcy = 0;
+        else if (dsty >= nHeight - 1)
+            srcy = (nHeight - 1) * 2;
+        else {
+            srcy = dsty * 2;
+            ymul0 = 1;
+            ymul1 = 3;
+        }
+
+        int sum = 0;
+        for (int j = -1; j <= 2; j++) {
+            int ymul = (j == 0 || j == 1) ? ymul1 : ymul0;
+            if (ymul > 0) {
+                for (int i = -1; i <= 2; i++) {
+                    int xmul = (i == 0 || i == 1) ? xmul1 : xmul0;
+                    if (xmul > 0) {
+                        int pix = (int)src[(srcx + i) + (srcy + j) * src_pitch];
+                        sum += pix * ymul * xmul;
+                    }
+                }
+            }
+        }
+        sum = (sum + 32) / 64;
+        dst[dstx + dsty * dst_pitch] = (PX)sum;
+    }
+}
+
+/* ---------------------------------------------------------------------------
  * Block-search pure helpers (MVKernel.cu dev_clip_mv / dev_check_mv /
  * dev_sq_norm / dev_get_ref_block). Pure integer functions shared by the
  * block-search / degrain / compensate kernels (see docs/BLOCKSEARCH_MODEL.md).

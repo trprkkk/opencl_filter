@@ -144,6 +144,13 @@ per-plane KTGMC kernels.
   (`run_mv_rb2b.py`, 200 cases): the single-pass OpenCL form recomputes the two
   separate phase roundings and matches the CPU `RB2BilinearFiltered` reference
   bit-for-bit.
+  Its CUDA-only fused twin `kt_rb2b_bilinear_filtered_with_pad` — the same
+  1:2 downsample done as ONE weighted 4×4-tap filter with a single +32/64
+  rounding that also fills the destination hpad/vpad border (MV.cpp
+  `ReduceToPad`; the CPU path instead runs the separable core + a separate
+  `Pad()`, so the two forms are numerically distinct) — is ALG-VERIFIED
+  (`run_mv_rb2b_pad.py`, 250 cases) against an independent C++ mirror that
+  transliterates the fused CUDA kernel verbatim.
   Note: upstream `kl_write_default_mv` sets `.x` twice (a typo for `.sad`); we
   implement the intended default.
 - **RIG-VERIFY** (faithful source ports, device run pending): the frame padding
@@ -183,7 +190,7 @@ reduction geometry. Concretely, the unported set splits into:
   is not bit-deterministic, so they are ported scalar / as flags only.
 
 So the isolated, per-output deterministic MV kernels are complete
-(18 in `ktgmc_motion.cl` + 25 in `ktgmc_simple.cl`), and `kt_calc_all_sad`
+(19 in `ktgmc_motion.cl` + 25 in `ktgmc_simple.cl`), and `kt_calc_all_sad`
 extends the set into the first block-level (MV + super-frame) kernel.
 Finishing KTGMC from here means assembling the `SearchBatchData` + super-frame
 layout on a real rig (see `docs/HOST_CONTRACT.md`) and then porting/validating

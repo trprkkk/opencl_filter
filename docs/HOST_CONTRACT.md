@@ -86,6 +86,7 @@ global size; each kernel also guards `x<… && y<…`.
 | `kt_calc_all_sad` | 2D `(nBlkX,nBlkY)` | pSrcY/U/V, pRefY/U/V: PX planes, vectors:`const int2*`, dst_sad:`int*`, out:`int3*`, `nBlkX,nBlkY,nPad,BLK_SIZE,NPEL,chroma,nPitchY,nPitchUV,nImgPitchY,nImgPitchUV` | per-block SAD of src block vs MV-selected ref block (NPEL sub-pel stack). RIG-VERIFY; model in `docs/BLOCKSEARCH_MODEL.md`. |
 | `kt_prepare_search` | 2D `(nBlkX,nBlkY)` | scalar block `nBlkX,nBlkY,nBlkSize,nLogScale,nLambdaLevel,lsad,penaltyZero,penaltyGlobal,penaltyNew,nPel,nPad,nBlkSizeOvr,nExtendedWidth,nExtendedHeight`, then vectors:`const int2*`, sads:`const int*`, vectors_copy:`int2*`, dst_data:`int*`(stride 12/blk), dst_dataf:`int*`(stride 5/blk), prog:`int*`, next:`int*` | `dst_data+dst_dataf` replace CUDA `SearchBlock`; `prog` length `nBlkX`, `next` scalar. |
 | `kt_rb2b_bilinear_filtered` | 2D `(nWidth, nHeight)` | src:`const PX*` `src_pitch`, dst:PX* `dst_pitch`, `nWidth`,`nHeight` | 1:2 downsample; src plane is 2·nWidth × 2·nHeight. |
+| `kt_rb2b_bilinear_filtered_with_pad` | 2D `(nWidth+2·hpad, nHeight+2·vpad)` | src:`const PX*` `src_pitch`, dst:PX* `dst_pitch`, `nWidth,nHeight,hpad,vpad` | fused single-round 1:2 downsample that also fills dst pad border; dst pointer at padded-interior origin (writes dstx=−hpad..). Source needs 2·nWidth × 2·nHeight rows. |
 | `kt_load_mv` | 1D `nBlk` | in:`const int3*`, vectors:`int2*`, sads:`int*`, `nBlk` | |
 | `kt_store_mv` | 1D `nBlk` | dst:`int3*`, vectors:`const int2*`, sads:`const int*`, `nBlk` | |
 | `kt_init_const_vec` | 2D `(2, nRows)` | vectors:`int2*`,`vectorsPitch`, globalMV:`const int2*`, `nPel` | slot `-2`=(0,0) if gid0==0 else slot `-1`=globalMV·nPel at row base. Host must leave 2 sentinel slots before each row. |
@@ -112,10 +113,10 @@ Python golden (`sim/*_ref.cpp`, `python/run_*.py`). Start with:
 
 ## 5. Kernels intentionally NOT yet ported (deferred to full host assembly)
 
-the RB2B bilinear variants, the warp/shared `kl_search` block
-loop, `kl_calc_all_sad`, and the `kl_degrain_*`/`kl_compensate_*` block kernels.
-These all additionally require the `MV.cpp` host state machine + super-frame
-sub-pel layout and are out of scope of this bring-up doc.
+The warp/shared `kl_search` block loop and the `kl_degrain_*`/`kl_compensate_*`
+block kernels. These additionally require the `MV.cpp` host state machine +
+super-frame sub-pel layout and are out of scope of this bring-up doc (see
+`docs/BLOCKSEARCH_MODEL.md` §8 for the exact remaining items).
 
 `kt_most_freq_mv` IS ported but carries a **RIG-VERIFY** marker: it returns the
 smallest most-frequent component. This is bit-exact vs CUDA whenever the mode is

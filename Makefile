@@ -24,6 +24,7 @@ test: ref lint
 	python3 python/run_mv_searchprep.py
 	python3 python/run_mv_io.py
 	python3 python/run_mv_rb2b.py
+	python3 python/run_mv_rb2b_pad.py
 
 clean:
 	rm -rf build

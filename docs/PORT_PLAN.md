@@ -98,7 +98,8 @@ Motion / super-sampling kernels now live in `src/opencl/ktgmc/kernels/ktgmc_moti
 (`kl_write_default_mv`, `kl_scene_change`/`_x2`, `kl_short_to_byte`,
 `kl_short_to_byte_or_copy_src`), the coarse→fine MV upsampler
 `kl_interpolate_prediction`, the global-MV refinement `kl_mean_global_mv`, and
-the per-block search setup `kl_prepare_search` (ANALYZE_SYNC=1).
+the per-block search setup `kl_prepare_search` (ANALYZE_SYNC=1), and the MV
+I/O trio `kl_load_mv`/`kl_store_mv`/`kl_init_const_vec`.
 Source-ported (RIG-VERIFY, device run pending):
 `kl_copy_pad`, `kl_pad_frame_h/v`, `kl_init_scene_change`.
 

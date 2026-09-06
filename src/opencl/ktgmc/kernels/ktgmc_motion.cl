@@ -518,3 +518,70 @@ kernel void kt_prepare_search(
         dataf[4] = lambda;
     }
 }
+
+/* ---------------------------------------------------------------------------
+ * MV I/O & sentinel-init kernels (MVKernel.cu).  A VECTOR (x,y,sad) is an
+ * int3; a motion "vector" (no sad) is an int2 in this port (CUDA short2).  The
+ * CUDA kernels split VECTOR into a short2 vectors[] buffer + int sads[]; we
+ * keep the two buffers separate but store ints.  Each MV row may carry two
+ * sentinel slots before its first usable element ([-2] zero-vector, [-1]
+ * global-vector), which the search setup's -2/-1 predictor indices reference.
+ * -------------------------------------------------------------------------*/
+
+// M14. kl_load_mv — split VECTOR int3 buffer into int2 vectors + int sads.
+//     ALG-VERIFIED (values passed through; no arithmetic).
+kernel void kt_load_mv(
+    __global const int3* __restrict in,
+    __global       int2* __restrict vectors,
+    __global       int*  __restrict sads,
+    int nBlk)
+{
+    int x = (int)get_global_id(0);
+    if (x < nBlk) {
+        int3 vin = in[x];
+        vectors[x].x = vin.x;
+        vectors[x].y = vin.y;
+        sads[x] = vin.z;
+    }
+}
+
+// M15. kl_store_mv — recombine int2 vectors + int sads into VECTOR int3.
+//     ALG-VERIFIED.
+kernel void kt_store_mv(
+    __global int3* __restrict dst,
+    __global const int2* __restrict vectors,
+    __global const int*  __restrict sads,
+    int nBlk)
+{
+    int x = (int)get_global_id(0);
+    if (x < nBlk) {
+        int2 v = vectors[x];
+        dst[x].x = v.x;
+        dst[x].y = v.y;
+        dst[x].z = sads[x];
+    }
+}
+
+// M16. kl_init_const_vec — write the two per-row sentinel motion vectors.
+//     For each MV row r (base = row*vectorsPitch):
+//       vectors[base-2] = (0,0)                       (zero-vector)
+//       vectors[base-1] = globalMV * nPel              (global-vector)
+//     The upstream CUDA launches 2 blocks on x (slot) x nRows (row); every
+//     thread writes the same value (benign).  Grid: (2, nRows) in OpenCL.
+//     ALG-VERIFIED (scaling by nPel is the only arithmetic).
+kernel void kt_init_const_vec(
+    __global int2* __restrict vectors, int vectorsPitch,
+    __global const int2* __restrict globalMV, int nPel)
+{
+    int xslot = (int)get_global_id(0);   /* 0 -> slot -2, 1 -> slot -1 */
+    int row   = (int)get_global_id(1);
+    __global int2* base = vectors + (size_t)row * vectorsPitch;
+    if (xslot == 0) {
+        base[-2].x = 0;
+        base[-2].y = 0;
+    } else {
+        int2 g = globalMV[0];
+        base[-1].x = g.x * nPel;
+        base[-1].y = g.y * nPel;
+    }
+}

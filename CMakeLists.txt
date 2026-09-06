@@ -34,3 +34,6 @@ add_test(NAME ktgmc_mv_mean
 add_test(NAME ktgmc_mv_searchprep
          COMMAND ${CMAKE_COMMAND} -E env
                  python3 ${CMAKE_SOURCE_DIR}/python/run_mv_searchprep.py)
+add_test(NAME ktgmc_mv_io
+         COMMAND ${CMAKE_COMMAND} -E env
+                 python3 ${CMAKE_SOURCE_DIR}/python/run_mv_io.py)

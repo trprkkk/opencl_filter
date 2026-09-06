@@ -19,6 +19,7 @@ test: ref
 	python3 python/run_mv_interp.py
 	python3 python/run_mv_mean.py
 	python3 python/run_mv_searchprep.py
+	python3 python/run_mv_io.py
 
 clean:
 	rm -rf build

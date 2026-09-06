@@ -135,6 +135,10 @@ per-plane KTGMC kernels.
   The per-block search setup `kt_prepare_search` (search bounds, predictor
   slot indices, prior-level vector copy, penalties and the lambda schedule;
   ANALYZE_SYNC=1) is ALG-VERIFIED (`run_mv_searchprep.py`, 300 cases).
+  The MV I/O trio `kt_load_mv`, `kt_store_mv`, `kt_init_const_vec` (split /
+  recombine VECTOR int3 with the int2-vector + int-sad buffers; write the two
+  per-row sentinels slot -2 = zero-vector, slot -1 = globalMV*nPel) is
+  ALG-VERIFIED (`run_mv_io.py`, 200 cases).
   Note: upstream `kl_write_default_mv` sets `.x` twice (a typo for `.sad`); we
   implement the intended default.
 - **RIG-VERIFY** (faithful source ports, device run pending): `kt_copy_pad`,

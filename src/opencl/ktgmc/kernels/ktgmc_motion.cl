@@ -708,3 +708,145 @@ kernel void kt_rb2b_bilinear_filtered(
         dst[x + y * dst_pitch] = (PX)v;
     }
 }
+
+/* ---------------------------------------------------------------------------
+ * Block-search pure helpers (MVKernel.cu dev_clip_mv / dev_check_mv /
+ * dev_sq_norm / dev_get_ref_block). Pure integer functions shared by the
+ * block-search / degrain / compensate kernels (see docs/BLOCKSEARCH_MODEL.md).
+ * Not dispatched on their own; RIG-VERIFY until exercised by a block kernel on
+ * a rig.
+ * -------------------------------------------------------------------------*/
+// Clamp motion vector v to the search rect: x to [rect[2],rect[0]],
+// y to [rect[3],rect[1]].  (rect == SearchBlock.data[0..3] CLIP_RECT.)
+static void kt_clip_mv(int2* v, __global const int* rect)
+{
+    int x = v->x;
+    x = (x > rect[0]) ? rect[0] : (x < rect[2]) ? rect[2] : x;
+    int y = v->y;
+    y = (y > rect[1]) ? rect[1] : (y < rect[3]) ? rect[3] : y;
+    v->x = x;
+    v->y = y;
+}
+
+// True iff (x,y) is inside the rect (all four bounds, no short-circuit).
+static int kt_check_mv(int x, int y, __global const int* rect)
+{
+    return (x <= rect[0]) & (y <= rect[1]) & (x >= rect[2]) & (y >= rect[3]);
+}
+
+// Squared distance between two motion vectors.
+static int kt_sq_norm(int ax, int ay, int bx, int by)
+{
+    return (ax - bx) * (ax - bx) + (ay - by) * (ay - by);
+}
+
+// Reference element OFFSET for a motion vector in an NPEL sub-pel plane stack:
+// the ref buffer is NPELxNPEL sub-pel planes stacked nImgPitch apart, each row
+// nPitch wide (dev_get_ref_block). Returns the linear index to add to a base
+// pointer already advanced to the block origin. NPEL in {1,2,4}.
+static int kt_ref_block_offset(int vx, int vy, int nPitch, int nImgPitch, int NPEL)
+{
+    if (NPEL == 1) {
+        return vx + vy * nPitch;
+    }
+    if (NPEL == 2) {
+        int sx = vx & 1;
+        int sy = vy & 1;
+        int si = sx + sy * 2;
+        return (vx >> 1) + (vy >> 1) * nPitch + si * nImgPitch;
+    }
+    /* NPEL == 4 */
+    {
+        int sx = vx & 3;
+        int sy = vy & 3;
+        int si = sx + sy * 4;
+        return (vx >> 2) + (vy >> 2) * nPitch + si * nImgPitch;
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * M20. kl_calc_all_sad — per-block SAD of the source block vs. the reference
+ *      block selected by that block's current MV (MVKernel.cu, used as the
+ *      initial "score the existing MV" pass).  Grid (nBlkX, nBlkY).
+ *
+ *      For block (bx,by): block origin offx/offy = nPad + (bx,by)*BLK_STEP,
+ *      BLK_STEP = BLK_SIZE/2.  xy = vectors[bx+by*nBlkX].  The reference is the
+ *      NPEL sub-pel plane stack (kt_ref_block_offset), so:
+ *        sad = sum |src(offx+jx, offy+jy) - ref(offx+jx, offy+jy + roff)|
+ *      over the BLK_SIZE x BLK_SIZE luma window, plus (when chroma) the
+ *      BLK_SIZE/2 x BLK_SIZE/2 U and V windows (chroma MV offsets vx>>1,vy>>1).
+ *      Writes dst_sad[blk]=sad and out[blk]=(xy.x,xy.y,sad).
+ *
+ *      The CUDA kernel splits the sums over BLK_SIZE*8 threads and reduces; the
+ *      partials are pure absolute-difference integer additions, order
+ *      independent, so a scalar double loop reproduces the total exactly (the
+ *      packed __vabsdiff4 / funnel-shift loads are load optimizations only).
+ *      // RIG-VERIFY: super-frame pSrc/pRef plane addresses + MV layout follow
+ *      // docs/BLOCKSEARCH_MODEL.md; confirm against the CUDA build on a rig.
+ * -------------------------------------------------------------------------*/
+kernel void kt_calc_all_sad(
+    __global const PX* __restrict pSrcY,
+    __global const PX* __restrict pSrcU,
+    __global const PX* __restrict pSrcV,
+    __global const PX* __restrict pRefY,
+    __global const PX* __restrict pRefU,
+    __global const PX* __restrict pRefV,
+    __global const int2* __restrict vectors,   /* MV per block (x,y) */
+    __global       int*  __restrict dst_sad,   /* int per block */
+    __global       int3* __restrict out,       /* VECTOR per block */
+    int nBlkX, int nBlkY, int nPad,
+    int BLK_SIZE, int NPEL, int chroma,
+    int nPitchY, int nPitchUV,
+    int nImgPitchY, int nImgPitchUV)
+{
+    int bx = (int)get_global_id(0);
+    int by = (int)get_global_id(1);
+    if (bx >= nBlkX || by >= nBlkY)
+        return;
+
+    int blkStep = BLK_SIZE >> 1;
+    int offx = nPad + bx * blkStep;
+    int offy = nPad + by * blkStep;
+
+    int2 xy = vectors[bx + by * nBlkX];
+    int sad = 0;
+
+    int roff = kt_ref_block_offset(xy.x, xy.y, nPitchY, nImgPitchY, NPEL);
+    for (int jy = 0; jy < BLK_SIZE; jy++) {
+        for (int jx = 0; jx < BLK_SIZE; jx++) {
+            int a = (int)pSrcY[(offx + jx) + (offy + jy) * nPitchY];
+            int b = (int)pRefY[(offx + jx) + (offy + jy) * nPitchY + roff];
+            int d = a - b; if (d < 0) d = -d;
+            sad += d;
+        }
+    }
+
+    if (chroma) {
+        int bs2 = BLK_SIZE >> 1;
+        int baseUx = offx >> 1;
+        int baseUy = offy >> 1;
+        int roffUV = kt_ref_block_offset(xy.x >> 1, xy.y >> 1,
+                                         nPitchUV, nImgPitchUV, NPEL);
+        for (int jy = 0; jy < bs2; jy++) {
+            for (int jx = 0; jx < bs2; jx++) {
+                int a = (int)pSrcU[(baseUx + jx) + (baseUy + jy) * nPitchUV];
+                int b = (int)pRefU[(baseUx + jx) + (baseUy + jy) * nPitchUV + roffUV];
+                int d = a - b; if (d < 0) d = -d;
+                sad += d;
+            }
+        }
+        for (int jy = 0; jy < bs2; jy++) {
+            for (int jx = 0; jx < bs2; jx++) {
+                int a = (int)pSrcV[(baseUx + jx) + (baseUy + jy) * nPitchUV];
+                int b = (int)pRefV[(baseUx + jx) + (baseUy + jy) * nPitchUV + roffUV];
+                int d = a - b; if (d < 0) d = -d;
+                sad += d;
+            }
+        }
+    }
+
+    dst_sad[bx + by * nBlkX] = sad;
+    out[bx + by * nBlkX].x = xy.x;
+    out[bx + by * nBlkX].y = xy.y;
+    out[bx + by * nBlkX].z = sad;
+}

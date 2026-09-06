@@ -146,23 +146,28 @@ per-plane KTGMC kernels.
   bit-for-bit.
   Note: upstream `kl_write_default_mv` sets `.x` twice (a typo for `.sad`); we
   implement the intended default.
-- **RIG-VERIFY** (faithful source ports, device run pending): `kt_copy_pad`,
-  `kt_pad_frame_h`, `kt_pad_frame_v`, `kt_init_scene_change`, and
-  `kt_most_freq_mv`. The latter returns the smallest most-frequent component
-  (bit-exact vs CUDA whenever the mode is unique, confirmed by a 20 000-row
-  simulation); when several values tie for the mode, CUDA's winner is an
-  artifact of its 1024-thread reduction tree and is not reproduced — reconcile
-  on the rig only if bit-exact tie output is required.
+- **RIG-VERIFY** (faithful source ports, device run pending): the frame padding
+  / mirror-copy kernels (`kt_copy_pad`, `kt_pad_frame_h/v`), `kt_init_scene_change`,
+  `kt_most_freq_mv`, the block-search pure helpers (`kt_clip_mv`/`kt_check_mv`/
+  `kt_sq_norm`/`kt_ref_block_offset`), and the first block-level kernel
+  `kt_calc_all_sad` (per-block SAD vs the MV-selected ref block). These follow
+  the authoritative host model in `docs/BLOCKSEARCH_MODEL.md`. That doc records
+  the key fact that the shipped CUDA launches compile with `CPU_EMU=true` — the
+  search runs the deterministic, CPU-ordered scalar path (not warp shuffles), so
+  a faithful scalar OpenCL port can reproduce it exactly.
+  `kt_most_freq_mv` returns the smallest most-frequent component (bit-exact vs
+  CUDA whenever the mode is unique, confirmed by a 20 000-row simulation); when
+  several values tie for the mode, CUDA's winner is an artifact of its 1024-thread
+  reduction tree and is not reproduced — reconcile on the rig only if bit-exact
+  tie output is required.
 All remaining kernels are **not** independently dispatchable/verifiable in this
 sandbox because their inputs come from the `SearchBatchData` super-frame host
 struct (built by the `MV.cpp` host state machine) and/or use warp/block
 reduction geometry. Concretely, the unported set splits into:
 
-- **Self-contained once the super-frame planes + MV arrays exist** (portable to a
-  rig and diff-able against a CPU mirror of the block math): `kl_calc_all_sad`
-  (per-block SAD of source block vs. the MV-pointed ref block incl. `NPEL`
-  sub-pel plane offset via `dev_get_ref_block`), and the device-side SAD helper
-  `dev_calc_sad` / `dev_check_mv` / `dev_clip_mv` / `dev_sq_norm`.
+- **Now ported (RIG-VERIFY):** `kl_calc_all_sad` and the pure helpers
+  `dev_check_mv` / `dev_clip_mv` / `dev_sq_norm` / `dev_get_ref_block`
+  (`kt_ref_block_offset`), which the block kernels share.
 - **Intrinsic to the warp/block `Search` driver** (only meaningful inside the
   block kernel; cannot be validated standalone): `Search`, `dev_read_pixels`,
   `dev_expanding_search_1/2`, `dev_hex2_search_1`, `MinCost`,
@@ -178,9 +183,11 @@ reduction geometry. Concretely, the unported set splits into:
   is not bit-deterministic, so they are ported scalar / as flags only.
 
 So the isolated, per-output deterministic MV kernels are complete
-(17 + 25 in the two `.cl` files). Finishing KTGMC from here means assembling the
-`SearchBatchData` + super-frame layout on a real rig (see `docs/HOST_CONTRACT.md`)
-and then porting/validating the groups above there.
+(18 in `ktgmc_motion.cl` + 25 in `ktgmc_simple.cl`), and `kt_calc_all_sad`
+extends the set into the first block-level (MV + super-frame) kernel.
+Finishing KTGMC from here means assembling the `SearchBatchData` + super-frame
+layout on a real rig (see `docs/HOST_CONTRACT.md`) and then porting/validating
+the remaining groups above there.
 
 ## 7. Verification plan on a real rig
 

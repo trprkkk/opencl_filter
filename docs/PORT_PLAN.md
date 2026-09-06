@@ -103,8 +103,11 @@ I/O trio `kl_load_mv`/`kl_store_mv`/`kl_init_const_vec`, and the reduced-plane
 builder `kl_RB2B_bilinear_filtered` (separable 1:2 downsample; `kl_RB2B_...
 _with_pad` direct variant is separate and not yet ported).
 Source-ported (RIG-VERIFY, device run pending):
-`kl_copy_pad`, `kl_pad_frame_h/v`, `kl_init_scene_change`, and
-`kl_most_freq_mv` (smallest-mode; bit-exact vs CUDA except on exact mode ties).
+`kl_copy_pad`, `kl_pad_frame_h/v`, `kl_init_scene_change`, `kl_most_freq_mv`
+(smallest-mode; bit-exact vs CUDA except on exact mode ties), the block-search
+pure helpers `dev_clip_mv`/`dev_check_mv`/`dev_sq_norm`/`dev_get_ref_block`,
+and the first block-level kernel `kl_calc_all_sad` (per-block SAD vs the
+MV-selected ref block; host model in `docs/BLOCKSEARCH_MODEL.md`).
 
 TODO (not yet ported): `kl_logic1/kl_logic3`, `kl_calculate_sad` (block-level),
 `kl_init_sad`, `kl_copy_boarder1(_v)`, `kl_RB2B_bilinear_filtered_with_pad`,

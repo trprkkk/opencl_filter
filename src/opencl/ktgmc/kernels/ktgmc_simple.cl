@@ -718,3 +718,36 @@ kernel void kt_horizontal_wiener(
         }
     }
 }
+
+/* ---------------------------------------------------------------------------
+ * Motion-analysis helper (from AviSynthCUDAFilters/KTGMC/Kernel.cu,
+ * KBinomialTemporalSoften path): frame/plane-level SAD sum between two planes
+ * used to decide scene-change per reference frame.
+ *
+ * CUDA kl_calculate_sad summed |cur - ref| over a whole plane using __sad /
+ * __vabsdiff4 accumulate semantics (sum of per-pixel absolute differences)
+ * into a per-plane int, reduced over the plane.  Here it is a straightforward
+ * global reduction of abs(a-b).  Host must zero *out* before dispatch (the CUDA
+ * side did the same with kl_init_sad).  On a real pipeline, one plane pair is
+ * summed for each reference (prv2/prv1/cur/fwd1/fwd2) and the host compares each
+ * to scenechange*width*height to build the scN flags consumed by
+ * kt_temporal_soften_1/2.
+ *
+ * NOTE: sum is accumulated in 32-bit int exactly as the CUDA `int sum`.  For
+ * 16-bit + very large frames that can overflow; CUDA had the same limitation
+ * (frame SAD is only used for the scene-change boolean), so it is preserved.
+ * -------------------------------------------------------------------------*/
+kernel void kt_plane_sad(
+    __global const PX* __restrict a, int a_pitch,
+    __global const PX* __restrict b, int b_pitch,
+    int width, int height,
+    __global int* __restrict out)   /* += sum over whole plane */
+{
+    int x = get_global_id(0);
+    int y = get_global_id(1);
+    if (x < width && y < height) {
+        int d = convert_int(a[x + y * a_pitch]) - convert_int(b[x + y * b_pitch]);
+        if (d < 0) d = -d;
+        atomic_add(out, d);
+    }
+}

@@ -81,6 +81,12 @@ bit-for-bit via `make test`, both 8-bit and 16-bit):
 | `kl_copy` / `kl_elementwise Copy` | `kt_copy` | ✔ |
 | `kl_vertical_wiener` (MVKernel.cu, KMSuper "sharp") | `kt_vertical_wiener` | ✔ |
 | `kl_horizontal_wiener` (MVKernel.cu, KMSuper "sharp") | `kt_horizontal_wiener` | ✔ |
+| `kl_calculate_sad` frame-level (Kernel.cu temporal soften) | `kt_plane_sad` | ✔² |
+
+² `kt_plane_sad` is the frame/plane absolute-diff sum (scene-change gate). The
+CUDA block/warp reductions are intrinsic/layout-specific; the *metric* is the
+scalar `sum |a-b|` which is validated here. Wiring it into the temporal-soften
+`scN` scene flags is host logic shown in the kernel comment.
 
 ¹ Scene-change replacement (the CUDA shared-memory `isSC[]` reduction) is exposed
 as scalar per-frame flags `scN` here; wiring the full SAD-based
@@ -105,7 +111,10 @@ To get a working deinterlacer you must port the mvtools-equivalent layers:
    need the exact host buffer semantics before validation.
 2. **Analysis** (`KMAnalyse`, `kl_calculate_sad`, block search, temporal/vector
    prediction, scene-change detection, `dev_reduce` block reductions → OpenCL
-   `barrier`/local reduce).
+   `barrier`/local reduce). — **frame-level SAD started** (`kt_plane_sad`,
+   validated); the block-level SAD (`dev_calc_sad`, warp reductions, `load4pix`)
+   and the block *search* (expanding / hex2 diamond) remain and are
+   architecture-layout-specific (see note ² above).
 3. **Compensation / Degrain** (`KMCompensate`, `kl_compensate_2x3`,
    `kl_degrain_2x3`, `kl_prepare_*`).
 4. **Assembly** — the QTGMC AVS script wires individual `KTGMC_*`/`K*` filters

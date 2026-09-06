@@ -259,6 +259,14 @@ template<typename PX>
 void kernel_copy(const Plane<PX>& src,Plane<PX>& dst){
     for(int y=0;y<dst.h;++y)for(int x=0;x<dst.w;++x)dst.at(x,y)=src.at(x,y);}
 
+template<typename PX>
+long long kernel_plane_sad(const Plane<PX>& a,const Plane<PX>& b){
+    long long sum=0;
+    for(int y=0;y<a.h;++y)for(int x=0;x<a.w;++x){ long long d=(long long)a.at(x,y)-b.at(x,y);
+        sum += d<0?-d:d; }
+    return sum;
+}
+
 /* ---------------- driver ---------------- */
 template<typename PX>
 bool run_all(const string& inDir,const string& outDir,const ResamplingProgram& progV,const ResamplingProgram& progH,int FIELD_H){
@@ -299,6 +307,7 @@ bool run_all(const string& inDir,const string& outDir,const ResamplingProgram& p
     {auto o=out(W,H);kernel_copy(a,o);writePlane(outDir,"copy",o);}
     {auto o=out(W,H);kernel_wiener_v(a,o);writePlane(outDir,"wiener_v",o);}
     {auto o=out(W,H);kernel_wiener_h(a,o);writePlane(outDir,"wiener_h",o);}
+    { FILE* f=fopen((outDir+"/plane_sad.txt").c_str(),"w"); fprintf(f,"%lld\n",kernel_plane_sad(a,b)); fclose(f); }
     return true;
 }
 

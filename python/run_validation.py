@@ -345,6 +345,14 @@ def kernel_weave(top,bottom,w,h2):
 def kernel_copy(src,w,h):
     return list(src)
 
+def kernel_plane_sad(a,b,w,h):
+    total=0
+    for y in range(h):
+        for x in range(w):
+            i=y*PITCH+x
+            total += abs(a[i]-b[i])
+    return total
+
 def kernel_wiener_v(src,w,h,maxval):
     out=[0]*(PITCH*h)
     for y in range(h):
@@ -431,6 +439,11 @@ def run_bits(bits):
     setg("wiener_h",A_H,kernel_wiener_h(a,W,A_H,maxval))
 
     ok=True
+    # plane SAD is a scalar: check separately
+    sad_ref=[int(l) for l in open(os.path.join(out_dir,"plane_sad.txt"))][0]
+    sad_gold=kernel_plane_sad(a,b,W,A_H)
+    if sad_ref!=sad_gold: ok=False; print(f"  MISMATCH plane_sad: {sad_ref} vs {sad_gold}")
+
     for name,golden in _gold.items():
         got=read_plane(os.path.join(out_dir,name+".raw"), W, out_h[name], bits)
         if got!=golden:

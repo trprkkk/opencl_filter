@@ -69,11 +69,22 @@ full kernel-by-kernel roadmap and how to extend the set.
 
 ```
 docs/PORT_PLAN.md              # port strategy + per-kernel roadmap + licensing
+docs/MV_PORT_SPEC.md           # motion-engine data model + kernel inventory + rig test plan
 src/opencl/ktgmc/kernels/      # OpenCL kernel sources (.cl)
 sim/ktgmc_cpu_ref.cpp          # scalar CPU mirror of the kernels (validates logic)
 python/run_validation.py       # independent Python golden + cross-check harness
 Makefile                       # make test  (no OpenCL required)
 ```
+
+## Port status
+
+- `ktgmc_simple.cl`: 25 per-plane KTGMC kernels — **bit-for-bit validated**
+  (8/16-bit) via CPU + Python references (`make test` PASS).
+- `ktgmc_motion.cl`: motion / super-sampling kernels (frame padding, mirror
+  copy) — faithful source ports marked **RIG-VERIFY** (no OpenCL/CUDA device in
+  this sandbox; see `docs/MV_PORT_SPEC.md` for the on-rig verification plan).
+  The block-search / degrain / compensate kernels additionally need the MV.cpp
+  host state machine and the super-frame sub-pel layout (documented there).
 
 ## How the port is validated (no GPU/OpenCL needed)
 

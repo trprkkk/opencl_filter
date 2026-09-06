@@ -105,10 +105,12 @@ reference; add its `.cl` variants next.
 To get a working deinterlacer you must port the mvtools-equivalent layers:
 
 1. **Super sampling** (`KMSuper`, `MVKernel.cu`): separable upscale to 4× pel,
-   levels pyramid. — **started**: the `kl_vertical_wiener`/`kl_horizontal_wiener`
-   ("sharp" interpolation) kernels are ported & validated; the RB2B bilinear
-   sub-pixel sampler and the padded super-frame layout are still pending and
-   need the exact host buffer semantics before validation.
+   levels pyramid. — **in progress**: the `kl_vertical_wiener`/`kl_horizontal_wiener`
+   ("sharp") kernels are ported & validated; `ktgmc_motion.cl` adds the frame
+   padding / mirror-copy kernels (source port, **RIG-VERIFY**); the RB2B
+   sub-pel sampler and the padded super-frame layout still need the host buffer
+   semantics from `MV.cpp`. Full data-model + verification plan:
+   [`docs/MV_PORT_SPEC.md`](MV_PORT_SPEC.md).
 2. **Analysis** (`KMAnalyse`, `kl_calculate_sad`, block search, temporal/vector
    prediction, scene-change detection, `dev_reduce` block reductions → OpenCL
    `barrier`/local reduce). — **frame-level SAD started** (`kt_plane_sad`,

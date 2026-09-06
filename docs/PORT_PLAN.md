@@ -52,32 +52,44 @@ upscaler), `KFM` (KDeband, Deblock, CombingAnalyze, DecombeUCF, MergeStatic…),
 ## 3. Milestone status map (Kernel.cu simple kernels)
 
 `src/opencl/ktgmc/kernels/ktgmc_simple.cl` currently contains (✔ = validated
-bit-for-bit via `make test`):
+bit-for-bit via `make test`, both 8-bit and 16-bit):
 
 | CUDA kernel (Kernel.cu) | OpenCL | Status |
 |---|---|---|
 | `kl_resample_v` + `ResamplingFunction`/`Program` | `kt_resample_v` | ✔ |
+| `kl_resample_h` | `kt_resample_h` | ✔ |
 | `kl_makediff` (`MakeDiffOp`) | `kt_makediff mode 0` | ✔ |
 | `kl_makediff` (`AddDiffOp`) | `kt_makediff mode 1` | ✔ |
 | `kl_box3x3_filter` RG11/RG20 | `kt_rg_box3x3` | ✔ |
 | `kl_rg_clip` N=1..4 | `kt_removegrain_clip` | ✔ |
 | `kl_repair_clip` N=1..4 | `kt_repair_clip` | ✔ |
 | `kl_vertical_cleaner_median` | `kt_vertical_cleaner_median` | ✔ |
+| `kl_box5_v_and_border` (Min5/Max5) | `kt_box5_minmax` | ✔ |
+| `kl_logic2` (LogicMin/Max) | `kt_logic_minmax` | ✔ |
+| `kl_box3_v` (Resharpen) | `kt_vresharpen` | ✔ |
+| `kl_resharpen` | `kt_resharpen` | ✔ |
+| `kl_limit_over_sharpen` | `kt_limit_over_sharpen` | ✔ |
 | `kl_to_full_range` (Y / UV) | `kt_to_full_range` | ✔ |
+| `kl_bobshimmerfixes_merge` | `kt_bobshimmerfixes_merge` | ✔ |
+| `kl_tweak_search_clip` | `kt_tweak_search_clip` | ✔ |
+| `kl_error_adjust` | `kt_error_adjust` | ✔ |
+| `kl_lossless_proc` | `kt_lossless_proc` | ✔ |
 | `kl_merge` | `kt_merge` | ✔ |
-| `kl_elementwise` / `kl_copy` | trivial | easy next |
-| `kl_resample_h` (GaussResize horizontal) | — | TODO |
-| `kl_box5_v_and_border` (Min5/Max5, Xpand/Expand ×2) | — | TODO |
-| `kl_logic1/2/3`, `kl_box3_v`(Resharpen), `kl_resharpen` | — | TODO |
-| `kl_limit_over_sharpen`, `kl_bobshimmerfixes_merge` | — | TODO |
-| `kl_tweak_search_clip`, `kl_error_adjust`, `kl_lossless_proc` | — | TODO |
-| `kl_binomial_temporal_soften_1/2` (needs SAD reduce) | — | TODO |
-| `kl_calculate_sad` (+block reduce) | — | TODO |
-| `kl_weave` (KDoubleWeave) | — | TODO |
-| `kl_copy_boarder1(_v)`, `kl_copy_pad`, `kl_pad_frame_h/v` | — | TODO |
+| `kl_binomial_temporal_soften_1` | `kt_temporal_soften_1` | ✔¹ |
+| `kl_binomial_temporal_soften_2` | `kt_temporal_soften_2` | ✔¹ |
+| `kl_weave` (KDoubleWeave) | `kt_weave` | ✔ |
+| `kl_copy` / `kl_elementwise Copy` | `kt_copy` | ✔ |
 
-`GaussianFilter` (KGaussResize) is already written as a second `ResamplingFunction`
-in the reference; add its `.cl` variants next.
+¹ Scene-change replacement (the CUDA shared-memory `isSC[]` reduction) is exposed
+as scalar per-frame flags `scN` here; wiring the full SAD-based
+`kl_calculate_sad` reduction is part of the motion stage.
+
+TODO (not yet ported): `kl_logic1/kl_logic3`, `kl_calculate_sad` (+block
+reduce), `kl_init_sad`, `kl_copy_boarder1(_v)`, `kl_copy_pad`, `kl_pad_frame_h/v`,
+`kl_vertical_wiener`, `kl_horizontal_wiener`, `kl_RB2B_bilinear_filtered(_with_pad)`,
+and all of `MVKernel.cu` / `MV.cpp` (see §4). `GaussianFilter` (KGaussResize) is
+already implemented as a second `ResamplingFunction` in the reference; add its
+`.cl` variants next.
 
 ## 4. Motion-compensation stages (the big remaining work)
 

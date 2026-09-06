@@ -299,3 +299,346 @@ kernel void kt_merge(
         dst[x + y * dst_pitch] = (PX)v;
     }
 }
+
+/* ---------------------------------------------------------------------------
+ * K9. Horizontal resampler (kl_resample_h) — used by KGaussResize etc.
+ *     Per output column x a FIR over source columns [offset[x] .. +filter_size).
+ *     offset[]/coef[] come from the host ResamplingProgram.
+ * -------------------------------------------------------------------------*/
+kernel void kt_resample_h(
+    __global const PX* __restrict src, int src_pitch,
+    __global       PX* __restrict dst, int dst_pitch,
+    int width, int height,
+    __global const int*   __restrict offset,
+    __global const float* __restrict coef,
+    int filter_size)
+{
+    int x = get_global_id(0);
+    int y = get_global_id(1);
+    if (x < width && y < height) {
+        int   begin = offset[x];
+        float acc   = 0.f;
+        for (int i = 0; i < filter_size; ++i)
+            acc += convert_float(src[(begin + i) + y * src_pitch]) *
+                   coef[x * filter_size + i];
+        acc = clamp(acc, 0.f, (float)PX_MAX);
+        dst[x + y * dst_pitch] = (PX)(int)(acc + 0.5f);
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * K10. box5 vertical min/max (kl_box5_v_and_border with Min5/Max5) =
+ *      Xpand/Expand VerticalX2.  Rows y-2..y+2 at the same x; rows out of the
+ *      picture are clamped to the centre row.
+ * -------------------------------------------------------------------------*/
+kernel void kt_box5_minmax(
+    __global const PX* __restrict src, int pitch,
+    __global       PX* __restrict dst, int pitcho,
+    int width, int height,
+    int is_min)
+{
+    int x = get_global_id(0);
+    int y = get_global_id(1);
+    if (x < width && y < height) {
+        int v2 = convert_int(src[x + y * pitch]);
+        int v0 = (y - 2 >= 0)     ? convert_int(src[x + (y - 2) * pitch]) : v2;
+        int v1 = (y - 1 >= 0)     ? convert_int(src[x + (y - 1) * pitch]) : v2;
+        int v3 = (y + 1 < height) ? convert_int(src[x + (y + 1) * pitch]) : v2;
+        int v4 = (y + 2 < height) ? convert_int(src[x + (y + 2) * pitch]) : v2;
+        int m;
+        if (is_min)
+            m = min(min(min(v0, v1), min(v2, v3)), v4);
+        else
+            m = max(max(max(v0, v1), max(v2, v3)), v4);
+        dst[x + y * pitcho] = (PX)m;
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * K11. logic min / max on two clips (kl_logic2 LogicMin/LogicMax).
+ * -------------------------------------------------------------------------*/
+kernel void kt_logic_minmax(
+    __global const PX* __restrict a, int a_pitch,
+    __global const PX* __restrict b, int b_pitch,
+    __global       PX* __restrict dst, int dst_pitch,
+    int width, int height,
+    int is_min)
+{
+    int x = get_global_id(0);
+    int y = get_global_id(1);
+    if (x < width && y < height) {
+        int va = convert_int(a[x + y * a_pitch]);
+        int vb = convert_int(b[x + y * b_pitch]);
+        dst[x + y * dst_pitch] = (PX)(is_min ? min(va, vb) : max(va, vb));
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * K12. Vertical resharpen (kl_box3_v Resharpen, KTGMC_VResharpen).
+ *      out = (min(prev,cur,next) + max(prev,cur,next) + 1) >> 1
+ *      top/bottom rows clamp to the current row.
+ * -------------------------------------------------------------------------*/
+kernel void kt_vresharpen(
+    __global const PX* __restrict src, int pitch,
+    __global       PX* __restrict dst, int pitcho,
+    int width, int height)
+{
+    int x = get_global_id(0);
+    int y = get_global_id(1);
+    if (x < width && y < height) {
+        int v1 = convert_int(src[x + y * pitch]);
+        int v0 = (y == 0)          ? v1 : convert_int(src[x + (y - 1) * pitch]);
+        int v2 = (y == height - 1) ? v1 : convert_int(src[x + (y + 1) * pitch]);
+        int mn = min(v0, min(v1, v2));
+        int mx = max(v0, max(v1, v2));
+        dst[x + y * pitcho] = (PX)((mn + mx + 1) >> 1);
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * K13. Resharpen (kl_resharpen, KTGMC_Resharpen).
+ *      lut = src0 + (src0 - src1) * sharpAdj ; out = (int)clamp(lut + 0.5f)
+ * -------------------------------------------------------------------------*/
+kernel void kt_resharpen(
+    __global const PX* __restrict s0, int p0,
+    __global const PX* __restrict s1, int p1,
+    __global       PX* __restrict dst, int dst_pitch,
+    int width, int height,
+    float sharpAdj)
+{
+    int x = get_global_id(0);
+    int y = get_global_id(1);
+    if (x < width && y < height) {
+        float srcx = convert_float(s0[x + y * p0]);
+        float srcy = convert_float(s1[x + y * p1]);
+        float lut  = srcx + (srcx - srcy) * sharpAdj;
+        lut = clamp(lut + 0.5f, 0.f, (float)PX_MAX);
+        dst[x + y * dst_pitch] = (PX)(int)lut;
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * K14. Limit over sharpen (kl_limit_over_sharpen).
+ *      tMin = min(ref, min(compb, compf)); tMax = max(ref, max(compb, compf));
+ *      out = clamp(src, tMin - osv, tMax + osv)
+ * -------------------------------------------------------------------------*/
+kernel void kt_limit_over_sharpen(
+    __global const PX* __restrict src, int s_pitch,
+    __global const PX* __restrict ref, int r_pitch,
+    __global const PX* __restrict cb,   int cb_pitch,
+    __global const PX* __restrict cf,   int cf_pitch,
+    __global       PX* __restrict dst,  int dst_pitch,
+    int width, int height,
+    int osv)
+{
+    int x = get_global_id(0);
+    int y = get_global_id(1);
+    if (x < width && y < height) {
+        int s = convert_int(src[x + y * s_pitch]);
+        int r = convert_int(ref[x + y * r_pitch]);
+        int b = convert_int(cb  [x + y * cb_pitch]);
+        int f = convert_int(cf  [x + y * cf_pitch]);
+        int tmin = min(r, min(b, f));
+        int tmax = max(r, max(b, f));
+        dst[x + y * dst_pitch] = (PX)clamp(s, tmin - osv, tmax + osv);
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * K15. Lossless proc (kl_lossless_proc).
+ *      if ((x-half)*(y-half) < 0)   -> half
+ *      else if (fabs(x-half) < fabs(y-half)) -> x
+ *      else -> y   ; then clamp to [0,maxval]; out = (int)(no +0.5)
+ * -------------------------------------------------------------------------*/
+kernel void kt_lossless_proc(
+    __global const PX* __restrict xa, int x_pitch,
+    __global const PX* __restrict ya, int y_pitch,
+    __global       PX* __restrict dst, int dst_pitch,
+    int width, int height,
+    float half, float maxval)
+{
+    int x = get_global_id(0);
+    int y = get_global_id(1);
+    if (x < width && y < height) {
+        float vx = convert_float(xa[x + y * x_pitch]);
+        float vy = convert_float(ya[x + y * y_pitch]);
+        float v;
+        if ((vx - half) * (vy - half) < 0.f)
+            v = half;
+        else if (fabs(vx - half) < fabs(vy - half))
+            v = vx;
+        else
+            v = vy;
+        v = clamp(v, 0.f, maxval);
+        dst[x + y * dst_pitch] = (PX)(int)v;
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * K16. Tweak search clip (kl_tweak_search_clip).
+ *      repair,bobbed,blur first scaled to 8-bit units (invscale), then:
+ *      tweaked = clamp(bobbed, repair-3, repair+3);
+ *      ret = (blur+7)<tweaked ? blur+2
+ *          : (blur-7)>tweaked ? blur-2
+ *          : (blur*51 + tweaked*49) * (1/100);
+ *      return ret*scale ; out=(int)clamp(d+0.5f)
+ * -------------------------------------------------------------------------*/
+kernel void kt_tweak_search_clip(
+    __global const PX* __restrict rep, int rep_pitch,
+    __global const PX* __restrict bob, int bob_pitch,
+    __global const PX* __restrict blr, int blr_pitch,
+    __global       PX* __restrict dst, int dst_pitch,
+    int width, int height,
+    float scale, float invscale)
+{
+    int x = get_global_id(0);
+    int y = get_global_id(1);
+    if (x < width && y < height) {
+        float repair = convert_float(rep[x + y * rep_pitch]) * invscale;
+        float bobbed = convert_float(bob[x + y * bob_pitch]) * invscale;
+        float blur   = convert_float(blr[x + y * blr_pitch]) * invscale;
+        float tweaked = clamp(bobbed, repair - 3.f, repair + 3.f);
+        float ret;
+        if ((blur + 7.f) < tweaked) ret = blur + 2.f;
+        else if ((blur - 7.f) > tweaked) ret = blur - 2.f;
+        else ret = (blur * 51.f + tweaked * 49.f) * (1.f / 100.f);
+        float d = ret * scale;
+        d = clamp(d + 0.5f, 0.f, (float)PX_MAX);
+        dst[x + y * dst_pitch] = (PX)(int)d;
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * K17. Error adjust (kl_error_adjust, KTGMC_ErrorAdjust).
+ *      lut = src*(errorAdj+1) - match*errorAdj ; out=(int)clamp(lut+0.5f)
+ * -------------------------------------------------------------------------*/
+kernel void kt_error_adjust(
+    __global const PX* __restrict src, int s_pitch,
+    __global const PX* __restrict mt,  int m_pitch,
+    __global       PX* __restrict dst, int dst_pitch,
+    int width, int height,
+    float errorAdj)
+{
+    int x = get_global_id(0);
+    int y = get_global_id(1);
+    if (x < width && y < height) {
+        float srcx = convert_float(src[x + y * s_pitch]);
+        float matx = convert_float(mt [x + y * m_pitch]);
+        float lut = (srcx * (errorAdj + 1.f)) - (matx * errorAdj);
+        lut = clamp(lut + 0.5f, 0.f, (float)PX_MAX);
+        dst[x + y * dst_pitch] = (PX)(int)lut;
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * K18. Bob shimmer fixes merge (kl_bobshimmerfixes_merge).
+ *      h = 128<<scale ;
+ *      diff = diff<(129<<scale) ? diff : (c1<h ? h : c1);
+ *      diff = diff>(127<<scale) ? diff : (c2>h ? h : c2);
+ *      out = clamp(src + diff - h, 0, PX_MAX)
+ * -------------------------------------------------------------------------*/
+kernel void kt_bobshimmerfixes_merge(
+    __global const PX* __restrict src,  int s_pitch,
+    __global const PX* __restrict diff, int d_pitch,
+    __global const PX* __restrict c1,   int c1_pitch,
+    __global const PX* __restrict c2,   int c2_pitch,
+    __global       PX* __restrict dst,  int dst_pitch,
+    int width, int height,
+    int scale)
+{
+    int x = get_global_id(0);
+    int y = get_global_id(1);
+    if (x < width && y < height) {
+        int s  = convert_int(src [x + y * s_pitch]);
+        int df = convert_int(diff[x + y * d_pitch]);
+        int c1v= convert_int(c1  [x + y * c1_pitch]);
+        int c2v= convert_int(c2  [x + y * c2_pitch]);
+        const int h  = 128 << scale;
+        df = (df < (129 << scale)) ? df : ((c1v < h) ? h : c1v);
+        df = (df > (127 << scale)) ? df : ((c2v > h) ? h : c2v);
+        int v = s + df - h;
+        dst[x + y * dst_pitch] = (PX)clamp(v, 0, PX_MAX);
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * K19/20. Binomial temporal soften 1 & 2 (kl_binomial_temporal_soften_1/2).
+ *      Scene-change flags are computed per ref frame upstream (SAD reduction);
+ *      if set, that ref is replaced by the current source pixel.
+ *   radius1: out = (r0 + 2*src + r1 + 2) >> 2
+ *   radius2: out = (r2 + 4*r0 + 6*src + 4*r1 + r3 + 4) >> 4
+ *      (refs labelled r0..r3 in the CUDA neighbour order)
+ * -------------------------------------------------------------------------*/
+kernel void kt_temporal_soften_1(
+    __global const PX* __restrict src, int src_pitch,
+    __global const PX* __restrict ref0, int ref0_pitch,
+    __global const PX* __restrict ref1, int ref1_pitch,
+    __global       PX* __restrict dst,  int dst_pitch,
+    int width, int height,
+    int sc0, int sc1)
+{
+    int x = get_global_id(0);
+    int y = get_global_id(1);
+    if (x < width && y < height) {
+        int s  = convert_int(src [x + y * src_pitch]);
+        int r0 = sc0 ? s : convert_int(ref0[x + y * ref0_pitch]);
+        int r1 = sc1 ? s : convert_int(ref1[x + y * ref1_pitch]);
+        int tmp = (r0 + 2 * s + r1 + 2) >> 2;
+        dst[x + y * dst_pitch] = (PX)clamp(tmp, 0, PX_MAX);
+    }
+}
+
+kernel void kt_temporal_soften_2(
+    __global const PX* __restrict src, int src_pitch,
+    __global const PX* __restrict ref0, int ref0_pitch,
+    __global const PX* __restrict ref1, int ref1_pitch,
+    __global const PX* __restrict ref2, int ref2_pitch,
+    __global const PX* __restrict ref3, int ref3_pitch,
+    __global       PX* __restrict dst,  int dst_pitch,
+    int width, int height,
+    int sc0, int sc1, int sc2, int sc3)
+{
+    int x = get_global_id(0);
+    int y = get_global_id(1);
+    if (x < width && y < height) {
+        int s  = convert_int(src [x + y * src_pitch]);
+        int r0 = sc0 ? s : convert_int(ref0[x + y * ref0_pitch]);
+        int r1 = sc1 ? s : convert_int(ref1[x + y * ref1_pitch]);
+        int r2 = sc2 ? s : convert_int(ref2[x + y * ref2_pitch]);
+        int r3 = sc3 ? s : convert_int(ref3[x + y * ref3_pitch]);
+        int tmp = (r2 + 4 * r0 + 6 * s + 4 * r1 + r3 + 4) >> 4;
+        dst[x + y * dst_pitch] = (PX)clamp(tmp, 0, PX_MAX);
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * K21. Weave two fields into one frame (kl_weave, KDoubleWeave).
+ *      dst row 2y   = top   row y ;  dst row 2y+1 = bottom row y
+ * -------------------------------------------------------------------------*/
+kernel void kt_weave(
+    __global const PX* __restrict top,    int top_pitch,
+    __global const PX* __restrict bottom, int bot_pitch,
+    __global       PX* __restrict dst,    int dst_pitch,
+    int width, int height2)
+{
+    int x = get_global_id(0);
+    int y = get_global_id(1);
+    if (x < width && y < height2) {
+        dst[x + (2 * y + 0) * dst_pitch] = top[x + y * top_pitch];
+        dst[x + (2 * y + 1) * dst_pitch] = bottom[x + y * bot_pitch];
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * K22. Copy (kl_copy / CopyFunction).  Straight plane copy honoring pitch.
+ * -------------------------------------------------------------------------*/
+kernel void kt_copy(
+    __global const PX* __restrict src, int src_pitch,
+    __global       PX* __restrict dst, int dst_pitch,
+    int width, int height)
+{
+    int x = get_global_id(0);
+    int y = get_global_id(1);
+    if (x < width && y < height)
+        dst[x + y * dst_pitch] = src[x + y * src_pitch];
+}

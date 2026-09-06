@@ -24,6 +24,7 @@ os.makedirs(WORK, exist_ok=True)
 W, PITCH = 16, 20
 A_H = B_H = REF_H = 10
 FIELD_H = 5
+NBR = ("a", "b", "c", "ref", "n2", "n1", "p1", "p2", "field")
 
 # ---------------------------------------------------------------- generation
 def gen_plane(rng, h, maxval, blocky=True):
@@ -45,15 +46,21 @@ def make_inputs(bits):
     planes = {}
     planes["a"]     = gen_plane(rng, A_H,     maxval)
     planes["b"]     = gen_plane(rng, B_H,     maxval)
+    planes["c"]     = gen_plane(rng, REF_H,   maxval)
     planes["ref"]   = gen_plane(rng, REF_H,   maxval)
+    planes["n2"]    = gen_plane(rng, A_H,     maxval)
+    planes["n1"]    = gen_plane(rng, A_H,     maxval)
+    planes["p1"]    = gen_plane(rng, A_H,     maxval)
+    planes["p2"]    = gen_plane(rng, A_H,     maxval)
     planes["field"] = gen_plane(rng, FIELD_H, maxval)
     fmt = "B" if bits == 8 else "H"
-    for name in ("a", "b", "ref", "field"):
+    for name in NBR:
         with open(os.path.join(d, name + ".raw"), "wb") as f:
             f.write(struct.pack(fmt * len(planes[name]), *planes[name]))
-    h = {"a": A_H, "b": B_H, "ref": REF_H, "field": FIELD_H}
+    h = {"a": A_H, "b": B_H, "c": REF_H, "ref": REF_H, "n2": A_H,
+         "n1": A_H, "p1": A_H, "p2": A_H, "field": FIELD_H}
     with open(os.path.join(d, "plane.info"), "w") as f:
-        for name in ("a", "b", "ref", "field"):
+        for name in NBR:
             f.write(f"{name} {W} {h[name]} {PITCH}\n")
     return d
 
@@ -205,6 +212,139 @@ def kernel_resample_v(field, w, fir, off, coef, maxval, h_in, h_out):
             out[y*PITCH+x]=int(acc+0.5)
     return out
 
+def kernel_resample_h(src, w, h, fir, off, coef, maxval):
+    out=[0]*(PITCH*h)
+    for y in range(h):
+        for x in range(w):
+            begin=off[x]; acc=0.0
+            for i in range(fir):
+                acc += float(src[y*PITCH+(begin+i)])*coef[x][i]
+            acc=clamp(acc,0.0,float(maxval))
+            out[y*PITCH+x]=int(acc+0.5)
+    return out
+
+def kernel_box5(src, w, h, is_min, maxval):
+    out=[0]*(PITCH*h)
+    for y in range(h):
+        for x in range(w):
+            i=y*PITCH+x; v2=src[i]
+            v0=src[(y-2)*PITCH+x] if y-2>=0 else v2
+            v1=src[(y-1)*PITCH+x] if y-1>=0 else v2
+            v3=src[(y+1)*PITCH+x] if y+1<h   else v2
+            v4=src[(y+2)*PITCH+x] if y+2<h   else v2
+            out[i]=min(min(min(v0,v1),min(v2,v3)),v4) if is_min else max(max(max(v0,v1),max(v2,v3)),v4)
+    return out
+
+def kernel_logic(a,b,w,h,is_min):
+    out=[0]*(PITCH*h)
+    for y in range(h):
+        for x in range(w):
+            i=y*PITCH+x
+            out[i]=min(a[i],b[i]) if is_min else max(a[i],b[i])
+    return out
+
+def kernel_vresharpen(src,w,h):
+    out=[0]*(PITCH*h)
+    for y in range(h):
+        for x in range(w):
+            i=y*PITCH+x; v1=src[i]
+            v0=src[(y-1)*PITCH+x] if y!=0 else v1
+            v2=src[(y+1)*PITCH+x] if y!=h-1 else v1
+            out[i]=(min(v0,min(v1,v2))+max(v0,max(v1,v2))+1)>>1
+    return out
+
+def kernel_resharpen(a,b,w,h,sharpAdj,maxval):
+    out=[0]*(PITCH*h)
+    for y in range(h):
+        for x in range(w):
+            i=y*PITCH+x
+            lut=int(clamp(a[i]+(a[i]-b[i])*sharpAdj+0.5,0.0,float(maxval)))
+            out[i]=lut
+    return out
+
+def kernel_limitos(src,ref,cb,cf,w,h,osv):
+    out=[0]*(PITCH*h)
+    for y in range(h):
+        for x in range(w):
+            i=y*PITCH+x; s=src[i];r=ref[i];b=cb[i];f=cf[i]
+            mn=min(r,min(b,f)); mx=max(r,max(b,f))
+            out[i]=clamp(s,mn-osv,mx+osv)
+    return out
+
+def kernel_lossless(xa,ya,w,h,half,maxval):
+    out=[0]*(PITCH*h)
+    for y in range(h):
+        for x in range(w):
+            i=y*PITCH+x; vx=float(xa[i]); vy=float(ya[i])
+            if (vx-half)*(vy-half)<0: v=half
+            elif abs(vx-half)<abs(vy-half): v=vx
+            else: v=vy
+            out[i]=int(clamp(v,0.0,maxval))
+    return out
+
+def kernel_tweak(rep,bob,blr,w,h,scale,invscale,maxval):
+    out=[0]*(PITCH*h)
+    for y in range(h):
+        for x in range(w):
+            i=y*PITCH+x
+            repair=float(rep[i])*invscale; bobbed=float(bob[i])*invscale; blur=float(blr[i])*invscale
+            tweaked=clamp(bobbed,repair-3,repair+3)
+            if (blur+7)<tweaked: ret=blur+2
+            elif (blur-7)>tweaked: ret=blur-2
+            else: ret=(blur*51+tweaked*49)*(1.0/100.0)
+            out[i]=int(clamp(ret*scale+0.5,0.0,float(maxval)))
+    return out
+
+def kernel_erroradjust(src,mt,w,h,errorAdj,maxval):
+    out=[0]*(PITCH*h)
+    for y in range(h):
+        for x in range(w):
+            i=y*PITCH+x
+            lut=int(clamp(src[i]*(errorAdj+1)-mt[i]*errorAdj+0.5,0.0,float(maxval)))
+            out[i]=lut
+    return out
+
+def kernel_bobshimmer(src,diff,c1,c2,w,h,scale,maxval):
+    hsh=128<<scale
+    out=[0]*(PITCH*h)
+    for y in range(h):
+        for x in range(w):
+            i=y*PITCH+x; s=src[i]; df=diff[i]; c1v=c1[i]; c2v=c2[i]
+            df = df if df<(129<<scale) else (hsh if c1v<hsh else c1v)
+            df = df if df>(127<<scale) else (hsh if c2v>hsh else c2v)
+            out[i]=clamp(s+df-hsh,0,maxval)
+    return out
+
+def kernel_soften1(src,r0,r1,w,h,sc0,sc1,maxval):
+    out=[0]*(PITCH*h)
+    for y in range(h):
+        for x in range(w):
+            i=y*PITCH+x; s=src[i]; a0=s if sc0 else r0[i]; a1=s if sc1 else r1[i]
+            out[i]=clamp((a0+2*s+a1+2)>>2,0,maxval)
+    return out
+
+def kernel_soften2(src,r0,r1,r2,r3,w,h,sc0,sc1,sc2,sc3,maxval):
+    out=[0]*(PITCH*h)
+    for y in range(h):
+        for x in range(w):
+            i=y*PITCH+x; s=src[i]
+            a0=s if sc0 else r0[i]; a1=s if sc1 else r1[i]
+            a2=s if sc2 else r2[i]; a3=s if sc3 else r3[i]
+            out[i]=clamp((a2+4*a0+6*s+4*a1+a3+4)>>4,0,maxval)
+    return out
+
+def kernel_weave(top,bottom,w,h2):
+    # h2 = number of input rows per field (each field h2 rows); out = 2*h2
+    out=[0]*(PITCH*2*h2)
+    for y in range(h2):
+        for x in range(w):
+            out[(2*y+0)*PITCH+x]=top[y*PITCH+x]
+            out[(2*y+1)*PITCH+x]=bottom[y*PITCH+x]
+    return out
+
+def kernel_copy(src,w,h):
+    return list(src)
+
 # ---------------------------------------------------------------- comparison
 def read_plane(path, w, h, bits):
     with open(path,"rb") as f: raw=f.read()
@@ -218,42 +358,56 @@ def run_bits(bits):
     out_dir=os.path.join(WORK, f"ref_{bits}")
     os.makedirs(out_dir, exist_ok=True)
     subprocess.run(["/tmp/ktgmc_ref", in_dir, out_dir, str(bits)], check=True)
-    rng=random.Random(1234+bits)
     # reload inputs
     def ld(name,h):
         return read_plane(os.path.join(in_dir,name+".raw"), W, h, bits)
-    a=ld("a",A_H); b=ld("b",B_H); ref=ld("ref",REF_H); field=ld("field",FIELD_H)
-
-    expected={}
-    if bits==8:
-        expected["makediff"]=kernel_makediff(a,b,W,A_H,0,128,255)
-        expected["adddiff"]=kernel_makediff(a,b,W,A_H,1,128,255)
-    else:
-        expected["makediff"]=kernel_makediff(a,b,W,A_H,0,32768,65535)
-        expected["adddiff"]=kernel_makediff(a,b,W,A_H,1,32768,65535)
-    expected["rg11"]=kernel_rg_box3x3(a,W,A_H,11,maxval)
-    expected["rg20"]=kernel_rg_box3x3(a,W,A_H,20,maxval)
+    a=ld("a",A_H); b=ld("b",A_H); c=ld("c",REF_H); ref=ld("ref",REF_H)
+    n2=ld("n2",A_H); n1=ld("n1",A_H); p1=ld("p1",A_H); p2=ld("p2",A_H)
+    field=ld("field",FIELD_H)
+    RANGE=1<<(bits-1)
+    out_h={}      # name -> output height
+    _gold={}
+    def setg(name,h,golden): out_h[name]=h; _gold[name]=golden
+    setg("makediff",A_H,kernel_makediff(a,b,W,A_H,0,RANGE,maxval))
+    setg("adddiff",A_H,kernel_makediff(a,b,W,A_H,1,RANGE,maxval))
+    setg("rg11",A_H,kernel_rg_box3x3(a,W,A_H,11,maxval))
+    setg("rg20",A_H,kernel_rg_box3x3(a,W,A_H,20,maxval))
     for n in range(1,5):
-        expected[f"rgclip{n}"]=kernel_removegrain(a,W,A_H,n,maxval)
-        expected[f"repair{n}"]=kernel_repair(a,ref,W,A_H,n,maxval)
-    expected["vclean"]=kernel_vclean(a,W,A_H)
-    expected["tfr_y"]=kernel_tfr(a,W,A_H,0,maxval)
-    expected["tfr_uv"]=kernel_tfr(a,W,A_H,1,maxval)
-    expected["merge"]=kernel_merge(a,b,W,A_H,int(0.5*32767),maxval)
+        setg(f"rgclip{n}",A_H,kernel_removegrain(a,W,A_H,n,maxval))
+        setg(f"repair{n}",A_H,kernel_repair(a,ref,W,A_H,n,maxval))
+    setg("vclean",A_H,kernel_vclean(a,W,A_H))
+    setg("tfr_y",A_H,kernel_tfr(a,W,A_H,0,maxval))
+    setg("tfr_uv",A_H,kernel_tfr(a,W,A_H,1,maxval))
+    setg("merge",A_H,kernel_merge(a,b,W,A_H,int(0.5*32767),maxval))
 
     fir,off,coef=build_resampling_program(5,0.25,5,10,0.0,0.5)
-    expected["resample_v"]=kernel_resample_v(field,W,fir,off,coef,maxval,FIELD_H,10)
+    setg("resample_v",10,kernel_resample_v(field,W,fir,off,coef,maxval,FIELD_H,10))
+    firh,offh,coefh=build_resampling_program(16,0,16,16,0.0,0.5)
+    setg("resample_h",A_H,kernel_resample_h(a,W,A_H,firh,offh,coefh,maxval))
+    setg("box5min",A_H,kernel_box5(a,W,A_H,1,maxval))
+    setg("box5max",A_H,kernel_box5(a,W,A_H,0,maxval))
+    setg("logicmin",A_H,kernel_logic(a,b,W,A_H,1))
+    setg("logicmax",A_H,kernel_logic(a,b,W,A_H,0))
+    setg("vresharpen",A_H,kernel_vresharpen(a,W,A_H))
+    setg("resharpen",A_H,kernel_resharpen(a,b,W,A_H,0.2,maxval))
+    setg("limitos",A_H,kernel_limitos(a,ref,b,c,W,A_H,3))
+    setg("lossless",A_H,kernel_lossless(a,b,W,A_H,float(RANGE),float(maxval)))
+    setg("tweak",A_H,kernel_tweak(a,b,ref,W,A_H,float(1<<(bits-8)),1.0/float(1<<(bits-8)),maxval))
+    setg("erroradj",A_H,kernel_erroradjust(a,b,W,A_H,0.05,maxval))
+    setg("bobshimmer",A_H,kernel_bobshimmer(a,b,ref,c,W,A_H,bits-8,maxval))
+    setg("soften1",A_H,kernel_soften1(a,n1,p1,W,A_H,1,0,maxval))
+    setg("soften2",A_H,kernel_soften2(a,n2,n1,p1,p2,W,A_H,0,1,0,1,maxval))
+    setg("weave",2*A_H,kernel_weave(n1,p1,W,A_H))
+    setg("copy",A_H,kernel_copy(a,W,A_H))
 
     ok=True
-    for name,exp in expected.items():
-        got=read_plane(os.path.join(out_dir,name+".raw"), W,
-                       10 if name!="resample_v" else 10, bits)
-        # note resample_v height 10 already; ensure correct
-        if got!=exp:
+    for name,golden in _gold.items():
+        got=read_plane(os.path.join(out_dir,name+".raw"), W, out_h[name], bits)
+        if got!=golden:
             ok=False
-            diffs=[i for i in range(len(exp)) if got[i]!=exp[i]][:5]
+            diffs=[i for i in range(len(golden)) if got[i]!=golden[i]][:5]
             print(f"  MISMATCH {name}: {len(diffs)}+ diffs, e.g. {diffs}")
-    # compare resample program tables
+    # compare resample program tables (vertical)
     if bits==8:
         coff=[int(l) for l in open(os.path.join(out_dir,"prog_offset.txt"))]
         cf=[float(l) for l in open(os.path.join(out_dir,"prog_coef.txt"))]

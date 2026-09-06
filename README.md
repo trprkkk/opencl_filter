@@ -28,20 +28,34 @@ multi-level motion estimation, block search and motion compensation. This repo
 therefore progresses in **milestones**; each milestone's kernels are translated
 faithfully and validated bit-for-bit against an independent reference.
 
-### Milestone 1 (current)
+### Milestone 1 (validated core)
 
-A validated core of the *per-plane, no-motion* KTGMC kernels (the parts that need
-no motion vectors), plus the host-side `ResamplingProgram`:
+A validated set of the *per-plane, no-motion* KTGMC kernels (the parts that need
+no motion vectors), plus the host-side `ResamplingProgram`. All 22 kernels below
+are present in `src/opencl/ktgmc/kernels/ktgmc_simple.cl` and cross-validated
+bit-for-bit (8-bit and 16-bit) against independent C++ and Python references via
+`make test`.
 
-- `kt_resample_v` — vertical resampler with host-built Mitchell/other FIR program
-  (the "Bob" field-interpolation engine).
-- `kt_makediff` / add-diff (masktools `mt_makediff`/`mt_adddiff` equivalent).
-- `kt_rg_box3x3` — RemoveGrain modes 11/12 ([1 2 1]) and 20 (3×3 mean).
-- `kt_removegrain_clip` — RemoveGrain modes 1–4 (8-neighbour sort network).
-- `kt_repair_clip` — Repair modes 1–4 (9-neighbour sort network).
-- `kt_vertical_cleaner_median` — VerticalCleaner mode 1 (vertical median).
-- `kt_to_full_range` — limited→full-range luma/chroma conversion.
-- `kt_merge` — weighted merge (32767 fixed point, as `KMerge`).
+Resample / resize (host FIR `ResamplingProgram`, Mitchell/Catmull-Rom + more):
+- `kt_resample_v` / `kt_resample_h` — the vertical & horizontal resamplers used
+  by the "Bob" field-interpolation engine and the GaussResize-style path.
+
+masktools-style combining:
+- `kt_makediff` / add-diff (mt_makediff / mt_adddiff equivalent),
+- `kt_logic_minmax` (KLogic min/max), `kt_merge` (32767 fixed point, KMerge).
+
+Denoise / spatial:
+- `kt_rg_box3x3` (RemoveGrain 11/12 & 20), `kt_removegrain_clip` (modes 1–4,
+  8-neighbour sort network), `kt_repair_clip` (modes 1–4, 9-neighbour sort
+  network), `kt_vertical_cleaner_median` (mode 1), `kt_box5_minmax`
+  (Inpand/Expand ×2 vertical).
+
+Bob/weave / sharper / misc:
+- `kt_vresharpen`, `kt_resharpen`, `kt_limit_over_sharpen`,
+  `kt_to_full_range` (Y & UV), `kt_bobshimmerfixes_merge`,
+  `kt_tweak_search_clip`, `kt_error_adjust`, `kt_lossless_proc`,
+  `kt_temporal_soften_1/2` (binomial, scene-change flags as scalars),
+  `kt_weave` (KDoubleWeave), `kt_copy`.
 
 Each is a faithful scalar OpenCL port (see the per-file notes about why scalar is
 mathematically identical). See [`docs/PORT_PLAN.md`](docs/PORT_PLAN.md) for the

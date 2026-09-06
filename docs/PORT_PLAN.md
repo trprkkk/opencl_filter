@@ -99,7 +99,8 @@ Motion / super-sampling kernels now live in `src/opencl/ktgmc/kernels/ktgmc_moti
 `kl_short_to_byte_or_copy_src`), the coarse→fine MV upsampler
 `kl_interpolate_prediction`, the global-MV refinement `kl_mean_global_mv`, and
 the per-block search setup `kl_prepare_search` (ANALYZE_SYNC=1), the MV
-I/O trio `kl_load_mv`/`kl_store_mv`/`kl_init_const_vec`, and the reduced-plane
+I/O quartet `kl_load_mv`/`kl_store_mv`/`kl_load_mv_batch`/`kl_init_const_vec`,
+and the reduced-plane
 builder `kl_RB2B_bilinear_filtered` (separable 1:2 downsample) and its CUDA-only
 fused twin `kl_RB2B_bilinear_filtered_with_pad` (single 4×4-tap +32/64 pass that
 also fills the hpad/vpad border, MV.cpp `ReduceToPad`) are both ALG-VERIFIED
@@ -113,10 +114,13 @@ MV-selected ref block; host model in `docs/BLOCKSEARCH_MODEL.md`).
 
 TODO (not yet ported):
 the block-search driver kernels (`Search`, expanding/hex2, `dev_read_pixels`,
-`dev_calc_sad`, `MinCost`, `dev_reduce_result`), `kl_degrain_2x3`,
-`kl_compensate_2x3`, `kl_prepare_degrain/compensate`, `kl_load_mv_batch`, and
-the MV.cpp host state machine (see `docs/BLOCKSEARCH_MODEL.md` §8 for the exact
-items that block these).
+`dev_calc_sad`, `MinCost`, `dev_reduce_result`), the degrain / compensate
+per-pixel stack (`kl_prepare_degrain`, `kl_degrain_2x3`, `kl_prepare_compensate`,
+`kl_compensate_2x3`), and the MV.cpp host state machine (see
+`docs/BLOCKSEARCH_MODEL.md` §8 and `docs/MV_PORT_SPEC.md` §6.1 for the exact
+items that block these — the block-geometry / super-plane pel model, the 9
+feathered `OverlapWindows`, and the `(nPatternX,nPatternY,M)` global-tmp launch
+geometry that the `_2x3` kernels are defined by).
 
 The `Kernel.cu` no-motion AVS filter-function kernels are all covered by
 `ktgmc_simple.cl` already. Of the extra names there, `kl_logic1`/`kl_logic3`

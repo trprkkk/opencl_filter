@@ -89,6 +89,7 @@ global size; each kernel also guards `x<… && y<…`.
 | `kt_rb2b_bilinear_filtered_with_pad` | 2D `(nWidth+2·hpad, nHeight+2·vpad)` | src:`const PX*` `src_pitch`, dst:PX* `dst_pitch`, `nWidth,nHeight,hpad,vpad` | fused single-round 1:2 downsample that also fills dst pad border; dst pointer at padded-interior origin (writes dstx=−hpad..). Source needs 2·nWidth × 2·nHeight rows. |
 | `kt_load_mv` | 1D `nBlk` | in:`const int3*`, vectors:`int2*`, sads:`int*`, `nBlk` | |
 | `kt_store_mv` | 1D `nBlk` | dst:`int3*`, vectors:`const int2*`, sads:`const int*`, `nBlk` | |
+| `kt_load_mv_batch` | 1D `nBlk` | out:`int3*`, src:`const int3*`, vectors:`int2*`, sads:`int*`, `nBlk` | per-batch MV split; out[x]=src[x] copy-through. |
 | `kt_init_const_vec` | 2D `(2, nRows)` | vectors:`int2*`,`vectorsPitch`, globalMV:`const int2*`, `nPel` | slot `-2`=(0,0) if gid0==0 else slot `-1`=globalMV·nPel at row base. Host must leave 2 sentinel slots before each row. |
 
 ### Program A — `ktgmc_simple.cl`

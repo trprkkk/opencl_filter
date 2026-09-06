@@ -67,8 +67,21 @@ def main():
             ok = False
             print("init_const_vec MISMATCH", got, exp)
 
-    print(f"MV IO kernels (load/store/init_const_vec): {'PASS' if ok else 'FAIL'} "
-          f"({total} cases)")
+    # mode 3: load_mv_batch. split VECTOR to vec+sad AND copy through to out.
+    # pass-through of (x,y,sad), same arithmetic as load.
+    for _ in range(60):
+        nBlk = rng.randint(1, 200)
+        tri = [(rng.randint(-5000, 5000), rng.randint(-5000, 5000),
+                rng.randint(0, 4000)) for _ in range(nBlk)]
+        inp = "".join(f"{a} {b} {c}\n" for (a, b, c) in tri)
+        got = run([3, nBlk], inp)
+        exp = [list(map(str, t)) for t in tri]
+        total += 1
+        if got != exp:
+            ok = False; print("load_mv_batch MISMATCH")
+
+    print(f"MV IO kernels (load/store/init_const_vec/load_mv_batch): "
+          f"{'PASS' if ok else 'FAIL'} ({total} cases)")
     return 0 if ok else 1
 
 

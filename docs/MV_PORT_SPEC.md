@@ -135,10 +135,11 @@ per-plane KTGMC kernels.
   The per-block search setup `kt_prepare_search` (search bounds, predictor
   slot indices, prior-level vector copy, penalties and the lambda schedule;
   ANALYZE_SYNC=1) is ALG-VERIFIED (`run_mv_searchprep.py`, 300 cases).
-  The MV I/O trio `kt_load_mv`, `kt_store_mv`, `kt_init_const_vec` (split /
+  The MV I/O quartet `kt_load_mv`, `kt_store_mv`, `kt_load_mv_batch` (the degrain
+  / compensate per-batch split + out copy-through), `kt_init_const_vec` (split /
   recombine VECTOR int3 with the int2-vector + int-sad buffers; write the two
   per-row sentinels slot -2 = zero-vector, slot -1 = globalMV*nPel) is
-  ALG-VERIFIED (`run_mv_io.py`, 200 cases).
+  ALG-VERIFIED (`run_mv_io.py`, 200+60 cases).
   The reduced-plane builder `kt_rb2b_bilinear_filtered` (separable (1,3,3,1)/8
   anti-aliased 1:2 downsample, KMSuper `ReduceTo`) is ALG-VERIFIED
   (`run_mv_rb2b.py`, 200 cases): the single-pass OpenCL form recomputes the two
@@ -182,7 +183,40 @@ reduction geometry. Concretely, the unported set splits into:
   loop.
 - **Degrain / compensate block kernels** (need `DegrainBlockData`/`ArgData`
   super-frame pointers + MV arrays): `kl_prepare_degrain`, `kl_degrain_2x3`,
-  `kl_prepare_compensate`, `kl_compensate_2x3`, `kl_load_mv_batch`.
+  `kl_prepare_compensate`, `kl_compensate_2x3`.
+
+### 6.1 Why the degrain / compensate per-pixel kernels stay rig-bound
+
+The two `_prepare` kernels (`kl_prepare_degrain`, `kl_prepare_compensate`) are
+per-block and self-contained in principle: for block (bx,by) they pick one of 9
+overlap windows via `wby = 3*((by+nBlkY-3)/(nBlkY-2))`, `wbx = (bx+nBlkX-3)/(nBlkX-2)`,
+slot `wby+wbx`; compute block origins `offx=bx*blkStep`, `offy=by*blkStep`
+(`blkStep=nBlkSize/2`) and `offsetS = nPad+offx + (nPad+offy)*nPitchSuper`;
+resolve each B/F ref to an element offset via the ALG-verified `dev_get_ref_block`
+(= `kt_ref_block_offset`); and normalise `WSrc/WRefB/WRefF` via the ALG-verified
+weight helpers. In MV.cpp the CPU reference (`KMDegrainCore::Proc`,
+`KMCompensateCore::Proc`, overlap branch) instead spaces blocks at `StepX =
+nBlkSizeX-nOverlapX` and reads `GetBlock(ix,iy).x = ix*StepX`, then maps an
+output pixel to the super plane at `block.x*nPel + mv…` through
+`KMPlane::GetPointer` (adds padding). So a *faithful device transliteration* must
+decide which block-geometry / super-plane coordinate model it implements — the
+MV.cpp `nPel`/padding/pel semantics (`nOverlap`, `nPel`, `nHPad/nVPad`,
+`nLogxRatio/yRatio`) are the ground truth, and they are exactly the super-frame
+host model this doc §5 flags as rig-only.
+
+The per-pixel `kl_degrain_2x3` / `kl_compensate_2x3` kernels are additionally
+defined by a **host launch geometry**, not by their own indexing: they accumulate
+weighted block patches (`Degrain1to6_C`-style `>>8` denoise, then an
+`Overlaps_C`-style `(px*winOver+256)>>6` overlap-add into a shared tmp, later
+`Short2Bytes`-style `>>5`/`>>11`) but tile the plane via `basex =
+(blockIdx.x*M+nPatternX)*SPAN_X`, `basey=(blockIdx.y*2+nPatternY)*SPAN_Y` with
+`SPAN_X=3, SPAN_Y=2` and dispatch several `(nPatternX,nPatternY,M)` instances
+from MV.cpp. Reproducing their exact global-tmp writes therefore requires that
+host pattern/grid, plus the window generation (`OverlapWindows`, 9 feathered
+windows of `nBlkSize*nBlkSize`), the block-geometry model of §6.1, and the
+per-plane `pDst` tmp layout — i.e. the full on-rig host assembly, not a
+self-contained kernel. We therefore record these as rig-bound rather than ship a
+speculative scalar re-derivation.
 - **Separate KTGMC temporal-filter path** (Kernel.cu, not MV): `kl_init_sad`,
   `kl_calculate_sad`, `kl_copy_boarder1(_v)`, `kl_logic1/2/3`, `kl_box3_v`,
   `kl_box5_v_and_border`, `kl_binomial_temporal_soften_1/2` — several use packed
@@ -190,7 +224,7 @@ reduction geometry. Concretely, the unported set splits into:
   is not bit-deterministic, so they are ported scalar / as flags only.
 
 So the isolated, per-output deterministic MV kernels are complete
-(19 in `ktgmc_motion.cl` + 25 in `ktgmc_simple.cl`), and `kt_calc_all_sad`
+(20 in `ktgmc_motion.cl` + 25 in `ktgmc_simple.cl`), and `kt_calc_all_sad`
 extends the set into the first block-level (MV + super-frame) kernel.
 Finishing KTGMC from here means assembling the `SearchBatchData` + super-frame
 layout on a real rig (see `docs/HOST_CONTRACT.md`) and then porting/validating

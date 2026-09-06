@@ -562,6 +562,31 @@ kernel void kt_store_mv(
     }
 }
 
+// M15b. kl_load_mv_batch — per-batch MV split used at the start of a degrain /
+//      compensate pass: for each element x < nBlk read VECTOR vsrc and write it
+//      through unchanged to out[x], split into vectors[x]=(vx,vy) and sads[x].
+//      The upstream kernel indexes one SearchBatchData by blockIdx.y (batch);
+//      that batch dimension is dropped here — the host passes per-batch
+//      pointers — exactly as with kt_load_mv.  CUDA truncates to short; we keep
+//      full int like the other MV I/O kernels (no data loss in practice).
+//      ALG-VERIFIED (pure pass-through, no arithmetic).
+kernel void kt_load_mv_batch(
+    __global       int3* __restrict out,
+    __global const int3* __restrict src,
+    __global       int2* __restrict vectors,
+    __global       int*  __restrict sads,
+    int nBlk)
+{
+    int x = (int)get_global_id(0);
+    if (x < nBlk) {
+        int3 vsrc = src[x];
+        vectors[x].x = vsrc.x;
+        vectors[x].y = vsrc.y;
+        sads[x] = vsrc.z;
+        out[x] = vsrc;
+    }
+}
+
 // M16. kl_init_const_vec — write the two per-row sentinel motion vectors.
 //     For each MV row r (base = row*vectorsPitch):
 //       vectors[base-2] = (0,0)                       (zero-vector)

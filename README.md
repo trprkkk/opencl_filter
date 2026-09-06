@@ -87,9 +87,9 @@ Makefile                       # make test  (no OpenCL required)
   kernels (`kt_write_default_mv`, `kt_scene_change`/`_x2`, `kt_short_to_byte`,
   `kt_short_to_byte_or_copy_src`), the coarse→fine MV upsampler
   `kt_interpolate_prediction`, the global-MV refinement `kt_mean_global_mv`,
-  the per-block search setup `kt_prepare_search`, the MV I/O trio
-  `kt_load_mv`/`kt_store_mv`/`kt_init_const_vec`, and both reduced-plane
-  builders `kt_rb2b_bilinear_filtered` (separable) and
+  the per-block search setup `kt_prepare_search`, the MV I/O quartet
+  `kt_load_mv`/`kt_store_mv`/`kt_load_mv_batch`/`kt_init_const_vec`, and both
+  reduced-plane builders `kt_rb2b_bilinear_filtered` (separable) and
   `kt_rb2b_bilinear_filtered_with_pad` (CUDA-only fused twin that also fills the
   hpad/vpad border). **RIG-VERIFY** (device run pending): frame padding /
   mirror copy, `kt_most_freq_mv` (smallest-mode seed), the block-search pure

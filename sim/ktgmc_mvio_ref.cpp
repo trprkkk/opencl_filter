@@ -8,6 +8,8 @@
  *                    -> prints nBlk "x y sad" (int3 VECTOR recombined)
  *   mode 2 (init):   2 nRows vectorsPitch gx gy nPel
  *                    -> prints nRows "s0x s0y s1x s1y" (slots -2 and -1)
+ *   mode 3 (batch):  3 nBlk then nBlk triplets "x y sad"
+ *                    -> prints nBlk "x y sad" (VECTOR split to vec/sad + out copy)
  */
 #include <cstdio>
 #include <cstdlib>
@@ -16,12 +18,13 @@ int main(int argc,char**argv){
     int mode=0,n=0;
     if(argc<2){return 2;}
     mode=atoi(argv[1]);
-    if(mode==0||mode==1){
+    if(mode==0||mode==1||mode==3){
         if(argc<3)return 2; n=atoi(argv[2]);
         for(int i=0;i<n;i++){
             int x,y,s; if(scanf("%d%d%d",&x,&y,&s)!=3)return 2;
-            if(mode==0) printf("%d %d %d\n",x,y,s);       /* pass x,y to vec; s to sad */
-            else        printf("%d %d %d\n",x,y,s);       /* recombine x,y,sad */
+            if(mode==3) printf("%d %d %d\n",x,y,s);   /* batch: split + out copy */
+            else if(mode==0) printf("%d %d %d\n",x,y,s); /* pass x,y to vec; s to sad */
+            else        printf("%d %d %d\n",x,y,s);   /* recombine x,y,sad */
         }
     }else if(mode==2){
         int nRows,pitch,gx,gy,nPel;

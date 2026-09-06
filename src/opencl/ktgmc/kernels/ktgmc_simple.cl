@@ -642,3 +642,79 @@ kernel void kt_copy(
     if (x < width && y < height)
         dst[x + y * dst_pitch] = src[x + y * src_pitch];
 }
+
+/* ===========================================================================
+ * Motion super-sampling filters — from AviSynthCUDAFilters/KTGMC/MVKernel.cu
+ * (part of KMSuper's "sharp" interpolation path; stage 2 of the port).
+ * These are 1-plane -> 1-plane per-pixel separable filters, so they validate
+ * exactly like the kernels above.
+ *
+ * "so called Wiener interpolation (sharp, similar to Lanczos?) — invariant
+ * simplified, 6 taps. Weights: (1,-5,20,20,-5,1)/32 - added by Fizick".
+ * =========================================================================*/
+
+/* ---------------------------------------------------------------------------
+ * S2a. kl_vertical_wiener.  max_pixel_value == PX_MAX.
+ * -------------------------------------------------------------------------*/
+kernel void kt_vertical_wiener(
+    __global const PX* __restrict src, int src_pitch,
+    __global       PX* __restrict dst, int dst_pitch,
+    int width, int height)
+{
+    int x = get_global_id(0);
+    int y = get_global_id(1);
+    if (x < width) {
+        if (y < 2) {
+            dst[x + y * dst_pitch] = (PX)((src[x + y * src_pitch] +
+                                           src[x + (y + 1) * src_pitch] + 1) >> 1);
+        } else if (y < height - 4) {
+            int p0 = convert_int(src[x + (y - 2) * src_pitch]);
+            int p1 = convert_int(src[x + (y - 1) * src_pitch]);
+            int p2 = convert_int(src[x + (y + 0) * src_pitch]);
+            int p3 = convert_int(src[x + (y + 1) * src_pitch]);
+            int p4 = convert_int(src[x + (y + 2) * src_pitch]);
+            int p5 = convert_int(src[x + (y + 3) * src_pitch]);
+            int num = p0 + ((-p1 + 4 * p2 + 4 * p3 - p4) * 5) + p5 + 16;
+            int v = clamp(num >> 5, 0, PX_MAX);
+            dst[x + y * dst_pitch] = (PX)v;
+        } else if (y < height - 1) {
+            dst[x + y * dst_pitch] = (PX)((src[x + y * src_pitch] +
+                                           src[x + (y + 1) * src_pitch] + 1) >> 1);
+        } else { /* last row */
+            dst[x + y * dst_pitch] = src[x + y * src_pitch];
+        }
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * S2b. kl_horizontal_wiener.
+ * -------------------------------------------------------------------------*/
+kernel void kt_horizontal_wiener(
+    __global const PX* __restrict src, int src_pitch,
+    __global       PX* __restrict dst, int dst_pitch,
+    int width, int height)
+{
+    int x = get_global_id(0);
+    int y = get_global_id(1);
+    if (y < height) {
+        if (x < 2) {
+            dst[x + y * dst_pitch] = (PX)((src[x + y * src_pitch] +
+                                           src[(x + 1) + y * src_pitch] + 1) >> 1);
+        } else if (x < width - 4) {
+            int p0 = convert_int(src[(x - 2) + y * src_pitch]);
+            int p1 = convert_int(src[(x - 1) + y * src_pitch]);
+            int p2 = convert_int(src[(x + 0) + y * src_pitch]);
+            int p3 = convert_int(src[(x + 1) + y * src_pitch]);
+            int p4 = convert_int(src[(x + 2) + y * src_pitch]);
+            int p5 = convert_int(src[(x + 3) + y * src_pitch]);
+            int num = p0 + ((-p1 + 4 * p2 + 4 * p3 - p4) * 5) + p5 + 16;
+            int v = clamp(num >> 5, 0, PX_MAX);
+            dst[x + y * dst_pitch] = (PX)v;
+        } else if (x < width - 1) {
+            dst[x + y * dst_pitch] = (PX)((src[x + y * src_pitch] +
+                                           src[(x + 1) + y * src_pitch] + 1) >> 1);
+        } else { /* last column */
+            dst[x + y * dst_pitch] = src[x + y * src_pitch];
+        }
+    }
+}

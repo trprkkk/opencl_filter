@@ -345,6 +345,34 @@ def kernel_weave(top,bottom,w,h2):
 def kernel_copy(src,w,h):
     return list(src)
 
+def kernel_wiener_v(src,w,h,maxval):
+    out=[0]*(PITCH*h)
+    for y in range(h):
+        for x in range(w):
+            P=lambda dy: src[y*PITCH+x+dy*PITCH]
+            if y<2: v=(P(0)+P(1)+1)>>1
+            elif y<h-4:
+                num=P(-2)+((-P(-1)+4*P(0)+4*P(1)-P(2))*5)+P(3)+16
+                v=clamp(num>>5,0,maxval)
+            elif y<h-1: v=(P(0)+P(1)+1)>>1
+            else: v=P(0)
+            out[y*PITCH+x]=v
+    return out
+
+def kernel_wiener_h(src,w,h,maxval):
+    out=[0]*(PITCH*h)
+    for y in range(h):
+        for x in range(w):
+            P=lambda dx: src[y*PITCH+(x+dx)]
+            if x<2: v=(P(0)+P(1)+1)>>1
+            elif x<w-4:
+                num=P(-2)+((-P(-1)+4*P(0)+4*P(1)-P(2))*5)+P(3)+16
+                v=clamp(num>>5,0,maxval)
+            elif x<w-1: v=(P(0)+P(1)+1)>>1
+            else: v=P(0)
+            out[y*PITCH+x]=v
+    return out
+
 # ---------------------------------------------------------------- comparison
 def read_plane(path, w, h, bits):
     with open(path,"rb") as f: raw=f.read()
@@ -399,6 +427,8 @@ def run_bits(bits):
     setg("soften2",A_H,kernel_soften2(a,n2,n1,p1,p2,W,A_H,0,1,0,1,maxval))
     setg("weave",2*A_H,kernel_weave(n1,p1,W,A_H))
     setg("copy",A_H,kernel_copy(a,W,A_H))
+    setg("wiener_v",A_H,kernel_wiener_v(a,W,A_H,maxval))
+    setg("wiener_h",A_H,kernel_wiener_h(a,W,A_H,maxval))
 
     ok=True
     for name,golden in _gold.items():

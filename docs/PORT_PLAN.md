@@ -79,6 +79,8 @@ bit-for-bit via `make test`, both 8-bit and 16-bit):
 | `kl_binomial_temporal_soften_2` | `kt_temporal_soften_2` | ✔¹ |
 | `kl_weave` (KDoubleWeave) | `kt_weave` | ✔ |
 | `kl_copy` / `kl_elementwise Copy` | `kt_copy` | ✔ |
+| `kl_vertical_wiener` (MVKernel.cu, KMSuper "sharp") | `kt_vertical_wiener` | ✔ |
+| `kl_horizontal_wiener` (MVKernel.cu, KMSuper "sharp") | `kt_horizontal_wiener` | ✔ |
 
 ¹ Scene-change replacement (the CUDA shared-memory `isSC[]` reduction) is exposed
 as scalar per-frame flags `scN` here; wiring the full SAD-based
@@ -86,17 +88,21 @@ as scalar per-frame flags `scN` here; wiring the full SAD-based
 
 TODO (not yet ported): `kl_logic1/kl_logic3`, `kl_calculate_sad` (+block
 reduce), `kl_init_sad`, `kl_copy_boarder1(_v)`, `kl_copy_pad`, `kl_pad_frame_h/v`,
-`kl_vertical_wiener`, `kl_horizontal_wiener`, `kl_RB2B_bilinear_filtered(_with_pad)`,
-and all of `MVKernel.cu` / `MV.cpp` (see §4). `GaussianFilter` (KGaussResize) is
-already implemented as a second `ResamplingFunction` in the reference; add its
-`.cl` variants next.
+`kl_RB2B_bilinear_filtered(_with_pad)`, and all of the motion-search /
+compensation layers (`Search`, `kl_degrain_2x3`, `kl_compensate_2x3`,
+`kl_scene_change*`, MV vector plumbing in `MV.cpp`). `GaussianFilter`
+(KGaussResize) is already implemented as a second `ResamplingFunction` in the
+reference; add its `.cl` variants next.
 
 ## 4. Motion-compensation stages (the big remaining work)
 
 To get a working deinterlacer you must port the mvtools-equivalent layers:
 
 1. **Super sampling** (`KMSuper`, `MVKernel.cu`): separable upscale to 4× pel,
-   levels pyramid.
+   levels pyramid. — **started**: the `kl_vertical_wiener`/`kl_horizontal_wiener`
+   ("sharp" interpolation) kernels are ported & validated; the RB2B bilinear
+   sub-pixel sampler and the padded super-frame layout are still pending and
+   need the exact host buffer semantics before validation.
 2. **Analysis** (`KMAnalyse`, `kl_calculate_sad`, block search, temporal/vector
    prediction, scene-change detection, `dev_reduce` block reductions → OpenCL
    `barrier`/local reduce).

@@ -36,6 +36,10 @@ are present in `src/opencl/ktgmc/kernels/ktgmc_simple.cl` and cross-validated
 bit-for-bit (8-bit and 16-bit) against independent C++ and Python references via
 `make test`.
 
+Motion super-sampling (stage 2, from `KTGMC/MVKernel.cu`, the `KMSuper`
+"sharp" interpolation path):
+- `kt_vertical_wiener` / `kt_horizontal_wiener` — 6-tap Wiener interpolation.
+
 Resample / resize (host FIR `ResamplingProgram`, Mitchell/Catmull-Rom + more):
 - `kt_resample_v` / `kt_resample_h` — the vertical & horizontal resamplers used
   by the "Bob" field-interpolation engine and the GaussResize-style path.

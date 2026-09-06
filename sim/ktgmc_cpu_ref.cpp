@@ -233,6 +233,29 @@ void kernel_weave(const Plane<PX>& top,const Plane<PX>& bottom,Plane<PX>& dst){
     for(int y=0;y<top.h;++y)for(int x=0;x<top.w;++x){
         dst.at(x,2*y+0)=top.at(x,y); dst.at(x,2*y+1)=bottom.at(x,y);}}
 template<typename PX>
+void kernel_wiener_v(const Plane<PX>& src,Plane<PX>& dst){
+    for(int y=0;y<dst.h;++y)for(int x=0;x<dst.w;++x){
+        auto P=[&](int dy)->int{return (int)src.at(x,y+dy);};
+        int v;
+        if(y<2) v=(P(0)+P(1)+1)>>1;
+        else if(y<(int)dst.h-4){ int num=P(-2)+((-P(-1)+4*P(0)+4*P(1)-P(2))*5)+P(3)+16;
+            v=clamp(num>>5,0,PixelMax<PX>()); }
+        else if(y<(int)dst.h-1) v=(P(0)+P(1)+1)>>1;
+        else v=P(0);
+        dst.at(x,y)=(PX)v;}}
+template<typename PX>
+void kernel_wiener_h(const Plane<PX>& src,Plane<PX>& dst){
+    for(int y=0;y<dst.h;++y)for(int x=0;x<dst.w;++x){
+        auto P=[&](int dx)->int{return (int)src.at(x+dx,y);};
+        int v;
+        if(x<2) v=(P(0)+P(1)+1)>>1;
+        else if(x<(int)dst.w-4){ int num=P(-2)+((-P(-1)+4*P(0)+4*P(1)-P(2))*5)+P(3)+16;
+            v=clamp(num>>5,0,PixelMax<PX>()); }
+        else if(x<(int)dst.w-1) v=(P(0)+P(1)+1)>>1;
+        else v=P(0);
+        dst.at(x,y)=(PX)v;}}
+
+template<typename PX>
 void kernel_copy(const Plane<PX>& src,Plane<PX>& dst){
     for(int y=0;y<dst.h;++y)for(int x=0;x<dst.w;++x)dst.at(x,y)=src.at(x,y);}
 
@@ -274,6 +297,8 @@ bool run_all(const string& inDir,const string& outDir,const ResamplingProgram& p
     {auto o=out(W,H);kernel_soften2(a,n2,n1,p1,p2,o,0,1,0,1);writePlane(outDir,"soften2",o);}
     {auto o=out(W,2*H);kernel_weave(n1,p1,o);writePlane(outDir,"weave",o);}
     {auto o=out(W,H);kernel_copy(a,o);writePlane(outDir,"copy",o);}
+    {auto o=out(W,H);kernel_wiener_v(a,o);writePlane(outDir,"wiener_v",o);}
+    {auto o=out(W,H);kernel_wiener_h(a,o);writePlane(outDir,"wiener_h",o);}
     return true;
 }
 

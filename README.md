@@ -83,9 +83,9 @@ Makefile                       # make test  (no OpenCL required)
 - `ktgmc_motion.cl`: motion / super-sampling kernels. **ALG-VERIFIED**: the
   degrain weight helpers (`kt_degrain_weight`, `kt_norm_weights`), MV-aux
   kernels (`kt_write_default_mv`, `kt_scene_change`/`_x2`, `kt_short_to_byte`,
-  `kt_short_to_byte_or_copy_src`), and the coarse→fine MV upsampler
-  `kt_interpolate_prediction`. **RIG-VERIFY** (device run pending): frame
-  padding / mirror copy. The search / degrain-block / compensate kernels need
+  `kt_short_to_byte_or_copy_src`), the coarse→fine MV upsampler
+  `kt_interpolate_prediction`, and the global-MV refinement `kt_mean_global_mv`.
+  **RIG-VERIFY** (device run pending): frame padding / mirror copy. The search / degrain-block / compensate kernels need
   the MV.cpp host state machine + super-frame sub-pel layout (see
   `docs/MV_PORT_SPEC.md`).
 

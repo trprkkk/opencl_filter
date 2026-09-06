@@ -96,8 +96,9 @@ Motion / super-sampling kernels now live in `src/opencl/ktgmc/kernels/ktgmc_moti
 (see `docs/MV_PORT_SPEC.md`). ALG-VERIFIED: the degrain weight helpers
 (`dev_degrain_weight`, `dev_norm_weights`), the MV-aux integer kernels
 (`kl_write_default_mv`, `kl_scene_change`/`_x2`, `kl_short_to_byte`,
-`kl_short_to_byte_or_copy_src`), and the coarse→fine MV upsampler
-`kl_interpolate_prediction`. Source-ported (RIG-VERIFY, device run pending):
+`kl_short_to_byte_or_copy_src`), the coarse→fine MV upsampler
+`kl_interpolate_prediction`, and the global-MV refinement `kl_mean_global_mv`.
+Source-ported (RIG-VERIFY, device run pending):
 `kl_copy_pad`, `kl_pad_frame_h/v`, `kl_init_scene_change`.
 
 TODO (not yet ported): `kl_logic1/kl_logic3`, `kl_calculate_sad` (block-level),

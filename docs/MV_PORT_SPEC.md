@@ -127,7 +127,11 @@ per-plane KTGMC kernels.
   cases); the MV-aux integer kernels `kt_write_default_mv`, `kt_scene_change`
   /`_x2`, `kt_short_to_byte`, `kt_short_to_byte_or_copy_src` (`run_mv_aux.py`,
   310 cases); and the coarse→fine MV upsampler `kt_interpolate_prediction`
-  (`run_mv_interp.py`, 200 random cases, bilinear parity 4-neighbour weights).
+  (`run_mv_interp.py`, 200 random cases, bilinear parity 4-neighbour weights);
+  and the per-row global-MV refinement `kt_mean_global_mv` (average of vectors
+  within 6 of the median estimate; `run_mv_mean.py`, 400 rowgroups — upstream
+  does a 1024-thread staged/shuffle reduction, but the integer sums are
+  order-independent so a serial per-row accumulation matches exactly).
   Note: upstream `kl_write_default_mv` sets `.x` twice (a typo for `.sad`); we
   implement the intended default.
 - **RIG-VERIFY** (faithful source ports, device run pending): `kt_copy_pad`,

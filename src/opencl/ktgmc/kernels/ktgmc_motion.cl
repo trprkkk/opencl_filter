@@ -378,3 +378,44 @@ kernel void kt_interpolate_prediction(
         dst_sad[index] = (tmp_sad >> 4);
     }
 }
+
+/* ---------------------------------------------------------------------------
+ * M13. kl_mean_global_mv — refine the per-row global MV by averaging the
+ *      vectors whose components are within 6 of the previous median estimate
+ *      (globalMVec[row] read from most_freq).  For each MV row: num = count of
+ *      vectors v with |v.x-medianx|<6 && |v.y-mediany|<6; then
+ *      globalMVec[row] = (2*sum_x/num, 2*sum_y/num).  The upstream kernel is a
+ *      1024-thread staged tree/shuffle reduction, but integer addition is
+ *      order-independent, so a per-row serial accumulation reproduces the
+ *      exact sums (row stride = vectorsPitch elements; blockIdx.y batching is
+ *      dropped, host passes per-row pointers). // ALG-VERIFIED below
+ * -------------------------------------------------------------------------*/
+kernel void kt_mean_global_mv(
+    __global const int2* __restrict vectors, int vectorsPitch,
+    int nVec,
+    __global       int2* __restrict globalMVec)
+{
+    int y = (int)get_global_id(1);
+
+    int medianx = globalMVec[y].x;
+    int mediany = globalMVec[y].y;
+
+    int meanvx = 0;
+    int meanvy = 0;
+    int num    = 0;
+
+    __global const int2* row = vectors + (size_t)y * vectorsPitch;
+    for (int i = 0; i < nVec; i++) {
+        int vx = row[i].x;
+        int vy = row[i].y;
+        int dx = vx - medianx; if (dx < 0) dx = -dx;
+        int dy = vy - mediany; if (dy < 0) dy = -dy;
+        if (dx < 6 && dy < 6) {   // __sad(a,b,0)=|a-b|, threshold <6
+            meanvx += vx;
+            meanvy += vy;
+            num += 1;
+        }
+    }
+    globalMVec[y].x = (2 * meanvx) / num;
+    globalMVec[y].y = (2 * meanvy) / num;
+}

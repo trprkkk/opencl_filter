@@ -81,9 +81,10 @@ Makefile                       # make test  (no OpenCL required)
 - `ktgmc_simple.cl`: 25 per-plane KTGMC kernels — **bit-for-bit validated**
   (8/16-bit) via CPU + Python references (`make test` PASS).
 - `ktgmc_motion.cl`: motion / super-sampling kernels. **ALG-VERIFIED**: the
-  degrain weight helpers (`kt_degrain_weight`, `kt_norm_weights`) and MV-aux
+  degrain weight helpers (`kt_degrain_weight`, `kt_norm_weights`), MV-aux
   kernels (`kt_write_default_mv`, `kt_scene_change`/`_x2`, `kt_short_to_byte`,
-  `kt_short_to_byte_or_copy_src`). **RIG-VERIFY** (device run pending): frame
+  `kt_short_to_byte_or_copy_src`), and the coarse→fine MV upsampler
+  `kt_interpolate_prediction`. **RIG-VERIFY** (device run pending): frame
   padding / mirror copy. The search / degrain-block / compensate kernels need
   the MV.cpp host state machine + super-frame sub-pel layout (see
   `docs/MV_PORT_SPEC.md`).

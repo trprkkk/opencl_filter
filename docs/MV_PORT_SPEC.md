@@ -124,10 +124,12 @@ per-plane KTGMC kernels.
 `src/opencl/ktgmc/kernels/ktgmc_motion.cl` holds the self-contained MV pieces:
 - **ALG-VERIFIED** (CPU + Python golden, `make test`): the degrain weight
   helpers `kt_degrain_weight`/`kt_norm_weights` (`run_motion_core.py`, 706
-  cases) and the MV-aux integer kernels `kt_write_default_mv`, `kt_scene_change`
+  cases); the MV-aux integer kernels `kt_write_default_mv`, `kt_scene_change`
   /`_x2`, `kt_short_to_byte`, `kt_short_to_byte_or_copy_src` (`run_mv_aux.py`,
-  310 cases). Note: upstream `kl_write_default_mv` sets `.x` twice (a typo for
-  `.sad`); we implement the intended default.
+  310 cases); and the coarse→fine MV upsampler `kt_interpolate_prediction`
+  (`run_mv_interp.py`, 200 random cases, bilinear parity 4-neighbour weights).
+  Note: upstream `kl_write_default_mv` sets `.x` twice (a typo for `.sad`); we
+  implement the intended default.
 - **RIG-VERIFY** (faithful source ports, device run pending): `kt_copy_pad`,
   `kt_pad_frame_h`, `kt_pad_frame_v`, `kt_init_scene_change`.
 All search / degrain-block / compensate kernels (block SAD, expanding/hex2

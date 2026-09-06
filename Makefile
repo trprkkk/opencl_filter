@@ -16,6 +16,7 @@ test: ref
 	python3 python/run_validation.py
 	python3 python/run_motion_core.py
 	python3 python/run_mv_aux.py
+	python3 python/run_mv_interp.py
 
 clean:
 	rm -rf build

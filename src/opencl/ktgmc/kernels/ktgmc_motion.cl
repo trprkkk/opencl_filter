@@ -285,3 +285,96 @@ kernel void kt_short_to_byte_or_copy_src(
         }
     }
 }
+
+/* ---------------------------------------------------------------------------
+ * M12. kl_interpolate_prediction — coarse→fine level MV upsampling.  For each
+ *      fine-level block (x,y) picks 1-4 coarse neighbours and combines them with
+ *      bilinear-style weights a11/a12/a21/a22 derived from parity offsets, then
+ *      scales by normFactor (>> if >0 else <<-normFactor) and divides SAD by 16.
+ *      Pure per-block integer function -> ALG-verifiable.
+ *      src_vector row stride is nSrcBlkX; dst row stride nDstBlkX (the CUDA
+ *      "pitch"/batch offset is handled by the host by passing per-batch
+ *      pointers; blockIdx.z batching is dropped).
+ *      // ALG-VERIFIED  (python/run_mv_interp.py, 200 random cases)
+ * -------------------------------------------------------------------------*/
+kernel void kt_interpolate_prediction(
+    __global const int2* __restrict src_vector,
+    __global const int*   __restrict src_sad,
+    __global       int2* __restrict dst_vector,
+    __global       int*   __restrict dst_sad,
+    int nSrcBlkX, int nSrcBlkY,
+    int nDstBlkX, int nDstBlkY,
+    int normFactor, int normov, int atotal, int aodd, int aeven)
+{
+    int x = (int)get_global_id(0);
+    int y = (int)get_global_id(1);
+    if (x < nDstBlkX && y < nDstBlkY) {
+        int i = x;
+        int j = y;
+        if (i >= 2 * nSrcBlkX) i = 2 * nSrcBlkX - 1;
+        if (j >= 2 * nSrcBlkY) j = 2 * nSrcBlkY - 1;
+        int offy = -1 + 2 * (j % 2);
+        int offx = -1 + 2 * (i % 2);
+        int iper2 = i >> 1;
+        int jper2 = j >> 1;
+
+        int v1x,v1y,v2x,v2y,v3x,v3y,v4x,v4y;
+        int sad1,sad2,sad3,sad4;
+
+        if ((i == 0) || (i >= 2 * nSrcBlkX - 1)) {
+            if ((j == 0) || (j >= 2 * nSrcBlkY - 1)) {
+                int2 v = src_vector[iper2 + jper2 * nSrcBlkX];
+                int s = src_sad[iper2 + jper2 * nSrcBlkX];
+                v1x=v2x=v3x=v4x=v.x; v1y=v2y=v3y=v4y=v.y;
+                sad1=sad2=sad3=sad4=s;
+            } else {
+                int2 va = src_vector[iper2 + jper2 * nSrcBlkX];
+                int2 vb = src_vector[iper2 + (jper2+offy) * nSrcBlkX];
+                v1x=v2x=va.x; v1y=v2y=va.y;
+                v3x=v4x=vb.x; v3y=v4y=vb.y;
+                sad1=sad2=src_sad[iper2 + jper2 * nSrcBlkX];
+                sad3=sad4=src_sad[iper2 + (jper2+offy) * nSrcBlkX];
+            }
+        } else if ((j == 0) || (j >= 2 * nSrcBlkY - 1)) {
+            int2 va = src_vector[iper2 + jper2 * nSrcBlkX];
+            int2 vb = src_vector[iper2 + offx + jper2 * nSrcBlkX];
+            v1x=v2x=va.x; v1y=v2y=va.y;
+            v3x=v4x=vb.x; v3y=v4y=vb.y;
+            sad1=sad2=src_sad[iper2 + jper2 * nSrcBlkX];
+            sad3=sad4=src_sad[iper2 + offx + jper2 * nSrcBlkX];
+        } else {
+            int2 v1 = src_vector[iper2 + jper2 * nSrcBlkX];
+            int2 v2 = src_vector[iper2 + offx + jper2 * nSrcBlkX];
+            int2 v3 = src_vector[iper2 + (jper2+offy) * nSrcBlkX];
+            int2 v4 = src_vector[iper2 + offx + (jper2+offy) * nSrcBlkX];
+            v1x=v1.x; v1y=v1.y; v2x=v2.x; v2y=v2.y;
+            v3x=v3.x; v3y=v3.y; v4x=v4.x; v4y=v4.y;
+            sad1=src_sad[iper2 + jper2 * nSrcBlkX];
+            sad2=src_sad[iper2 + offx + jper2 * nSrcBlkX];
+            sad3=src_sad[iper2 + (jper2+offy) * nSrcBlkX];
+            sad4=src_sad[iper2 + offx + (jper2+offy) * nSrcBlkX];
+        }
+
+        int ax1 = (offx > 0) ? aodd : aeven;
+        int ax2 = atotal - ax1;
+        int ay1 = (offy > 0) ? aodd : aeven;
+        int ay2 = atotal - ay1;
+        int a11 = ax1*ay1, a12 = ax1*ay2, a21 = ax2*ay1, a22 = ax2*ay2;
+        int vx = (a11*v1x + a21*v2x + a12*v3x + a22*v4x) / normov;
+        int vy = (a11*v1y + a21*v2y + a12*v3y + a22*v4y) / normov;
+        int tmp_sad = (a11*sad1 + a21*sad2 + a12*sad3 + a22*sad4) / normov;
+
+        if (normFactor > 0) {
+            vx >>= normFactor;
+            vy >>= normFactor;
+        } else {
+            vx <<= -normFactor;
+            vy <<= -normFactor;
+        }
+
+        int index = x + y * nDstBlkX;
+        dst_vector[index].x = vx;
+        dst_vector[index].y = vy;
+        dst_sad[index] = (tmp_sad >> 4);
+    }
+}

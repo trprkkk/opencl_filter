@@ -25,3 +25,6 @@ add_test(NAME ktgmc_motion_core
 add_test(NAME ktgmc_mv_aux
          COMMAND ${CMAKE_COMMAND} -E env
                  python3 ${CMAKE_SOURCE_DIR}/python/run_mv_aux.py)
+add_test(NAME ktgmc_mv_interp
+         COMMAND ${CMAKE_COMMAND} -E env
+                 python3 ${CMAKE_SOURCE_DIR}/python/run_mv_interp.py)

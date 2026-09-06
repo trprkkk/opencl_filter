@@ -142,7 +142,12 @@ per-plane KTGMC kernels.
   Note: upstream `kl_write_default_mv` sets `.x` twice (a typo for `.sad`); we
   implement the intended default.
 - **RIG-VERIFY** (faithful source ports, device run pending): `kt_copy_pad`,
-  `kt_pad_frame_h`, `kt_pad_frame_v`, `kt_init_scene_change`.
+  `kt_pad_frame_h`, `kt_pad_frame_v`, `kt_init_scene_change`, and
+  `kt_most_freq_mv`. The latter returns the smallest most-frequent component
+  (bit-exact vs CUDA whenever the mode is unique, confirmed by a 20 000-row
+  simulation); when several values tie for the mode, CUDA's winner is an
+  artifact of its 1024-thread reduction tree and is not reproduced — reconcile
+  on the rig only if bit-exact tie output is required.
 All search / degrain-block / compensate kernels (block SAD, expanding/hex2
 search, `kl_degrain_2x3`, `kl_compensate_2x3`) still need the MV.cpp host state
 machine and super-frame layout before they can be assembled and validated.

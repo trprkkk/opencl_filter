@@ -585,3 +585,56 @@ kernel void kt_init_const_vec(
         base[-1].y = g.y * nPel;
     }
 }
+
+/* ---------------------------------------------------------------------------
+ * M18. kl_most_freq_mv — per-row "mode" of the MV component, used as the
+ *      per-row global-MV seed that kl_mean_global_mv then refines.  Upstream
+ *      builds a shared histogram of component value (comp+4096) over 8192 bins
+ *      and returns a maximally-counted component.
+ *
+ *      TIE-BREAK / RIG-VERIFY: when the global-max count M is unique the result
+ *      is the single most-frequent value (all sensible rules agree and this is
+ *      bit-identical to CUDA).  When several values tie at M, the CUDA winner is
+ *      an artifact of its 1024-thread reduction tree (per-thread residue scan +
+ *      dev_reduce2 tie "lower tid"), which we found is NOT reducible to a simple
+ *      min/max rule.  The port below therefore returns the SMALLEST value among
+ *      the modes - a deterministic, intent-faithful choice - and is marked
+ *      RIG-VERIFY: the tie case must be reconciled against the CUDA build on a
+ *      real rig if bit-exact tie output is ever required (docs/MV_PORT_SPEC.md
+ *      §7).  In practice the seed is then refined by kl_mean_global_mv, so a
+ *      different equal-frequency mode rarely changes the final output.
+ *
+ *      Pure per-row serial scan, O(nVec^2); no work-group / histogram buffer
+ *      needed (once-per-level seed; a two-pass histogram may optimize later but
+ *      must keep this documented tie-break).
+ *      // RIG-VERIFY (tie-break vs CUDA pending on-rig reconciliation)
+ * -------------------------------------------------------------------------*/
+kernel void kt_most_freq_mv(
+    __global const int2* __restrict vectors, int vectorsPitch,
+    int nVec,
+    int isY,                     /* 0 -> mode of x, else mode of y */
+    __global       int2* __restrict globalMVec)
+{
+    int row = (int)get_global_id(1);
+    __global const int2* base = vectors + (size_t)row * vectorsPitch;
+
+    int bestCnt = 0;
+    int bestVal = 0x7fffffff;
+
+    for (int i = 0; i < nVec; i++) {
+        int vi = isY ? base[i].y : base[i].x;
+        int cnt = 0;
+        for (int j = 0; j < nVec; j++) {
+            int vj = isY ? base[j].y : base[j].x;
+            if (vj == vi) cnt++;
+        }
+        if (cnt > bestCnt || (cnt == bestCnt && vi < bestVal)) {
+            bestCnt = cnt;
+            bestVal = vi;
+        }
+    }
+    if (isY)
+        globalMVec[row].y = bestVal;
+    else
+        globalMVec[row].x = bestVal;
+}

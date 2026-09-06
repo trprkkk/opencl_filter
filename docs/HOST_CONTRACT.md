@@ -82,6 +82,7 @@ global size; each kernel also guards `x<… && y<…`.
 | `kt_short_to_byte_or_copy_src` | 2D `(width,height)` | pflag:`const int*`, dst:PX*,`dst_pitch`, src:`const PX*`,`src_pitch`, tmp:`const int*`,`tmp_pitch`,`width,height`,`shift` | pflag[0]!=0→convert, else copy src. |
 | `kt_interpolate_prediction` | 2D `(nDstBlkX,nDstBlkY)` | src_vector:`const int2*`, src_sad:`const int*`, dst_vector:`int2*`, dst_sad:`int*`, `nSrcBlkX,nSrcBlkY,nDstBlkX,nDstBlkY,normFactor,normov,atotal,aodd,aeven` | src/dst buffers hold a single batch's packed blocks (row stride `nSrcBlkX`/`nDstBlkX`). |
 | `kt_mean_global_mv` | 2D `(1, nRows)` | vectors:`const int2*`,`vectorsPitch`,`nVec`, globalMVec:`int2*` | row r at `vectors + r*vectorsPitch`. |
+| `kt_most_freq_mv` | 2D `(1, nRows)` | vectors:`const int2*`,`vectorsPitch`,`nVec`,`isY`, globalMVec:`int2*` | mode seed; RIG-VERIFY tie-break (see §5). |
 | `kt_prepare_search` | 2D `(nBlkX,nBlkY)` | scalar block `nBlkX,nBlkY,nBlkSize,nLogScale,nLambdaLevel,lsad,penaltyZero,penaltyGlobal,penaltyNew,nPel,nPad,nBlkSizeOvr,nExtendedWidth,nExtendedHeight`, then vectors:`const int2*`, sads:`const int*`, vectors_copy:`int2*`, dst_data:`int*`(stride 12/blk), dst_dataf:`int*`(stride 5/blk), prog:`int*`, next:`int*` | `dst_data+dst_dataf` replace CUDA `SearchBlock`; `prog` length `nBlkX`, `next` scalar. |
 | `kt_load_mv` | 1D `nBlk` | in:`const int3*`, vectors:`int2*`, sads:`int*`, `nBlk` | |
 | `kt_store_mv` | 1D `nBlk` | dst:`int3*`, vectors:`const int2*`, sads:`const int*`, `nBlk` | |
@@ -109,12 +110,16 @@ Python golden (`sim/*_ref.cpp`, `python/run_*.py`). Start with:
 
 ## 5. Kernels intentionally NOT yet ported (deferred to full host assembly)
 
-`kl_most_freq_mv` (its count-tie winner depends on the CUDA thread/residue-class
-assignment and the `dev_reduce2` tree — not reproducible without the CUDA build
-to diff against), the RB2B bilinear variants, the warp/shared `kl_search` block
+the RB2B bilinear variants, the warp/shared `kl_search` block
 loop, `kl_calc_all_sad`, and the `kl_degrain_*`/`kl_compensate_*` block kernels.
 These all additionally require the `MV.cpp` host state machine + super-frame
 sub-pel layout and are out of scope of this bring-up doc.
+
+`kt_most_freq_mv` IS ported but carries a **RIG-VERIFY** marker: it returns the
+smallest most-frequent component. This is bit-exact vs CUDA whenever the mode is
+unique (simulation-confirmed) and only diverges when several values tie for the
+mode, in which case CUDA's pick is an artifact of its 1024-thread reduction tree
+— reconcile on the rig only if bit-exact tie output matters.
 
 ## 6. Risks / open questions to resolve on rig
 

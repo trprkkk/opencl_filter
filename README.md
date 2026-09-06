@@ -88,7 +88,8 @@ Makefile                       # make test  (no OpenCL required)
   `kt_interpolate_prediction`, the global-MV refinement `kt_mean_global_mv`,
   the per-block search setup `kt_prepare_search`, and the MV I/O trio
   `kt_load_mv`/`kt_store_mv`/`kt_init_const_vec`. **RIG-VERIFY** (device run
-  pending): frame padding / mirror copy. The search / degrain-block / compensate kernels need
+  pending): frame padding / mirror copy and `kt_most_freq_mv` (smallest-mode
+  seed; bit-exact vs CUDA except on exact mode ties). The search / degrain-block / compensate kernels need
   the MV.cpp host state machine + super-frame sub-pel layout (see
   `docs/MV_PORT_SPEC.md`).
 

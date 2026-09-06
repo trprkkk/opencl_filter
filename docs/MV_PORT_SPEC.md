@@ -132,6 +132,9 @@ per-plane KTGMC kernels.
   within 6 of the median estimate; `run_mv_mean.py`, 400 rowgroups — upstream
   does a 1024-thread staged/shuffle reduction, but the integer sums are
   order-independent so a serial per-row accumulation matches exactly).
+  The per-block search setup `kt_prepare_search` (search bounds, predictor
+  slot indices, prior-level vector copy, penalties and the lambda schedule;
+  ANALYZE_SYNC=1) is ALG-VERIFIED (`run_mv_searchprep.py`, 300 cases).
   Note: upstream `kl_write_default_mv` sets `.x` twice (a typo for `.sad`); we
   implement the intended default.
 - **RIG-VERIFY** (faithful source ports, device run pending): `kt_copy_pad`,

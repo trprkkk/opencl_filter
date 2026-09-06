@@ -419,3 +419,102 @@ kernel void kt_mean_global_mv(
     globalMVec[y].x = (2 * meanvx) / num;
     globalMVec[y].y = (2 * meanvy) / num;
 }
+
+/* ---------------------------------------------------------------------------
+ * M17. kl_prepare_search — per-block search setup (MVKernel.cu, ANALYZE_SYNC=1).
+ *      For each block (bx,by) computes, purely from its own cell and its own
+ *      vector+sad (no neighbour reads inside this kernel):
+ *        nDxMax/nDyMax/nDxMin/nDyMin block-search bounds into data[0..3];
+ *        predictor slot indices data[4..9] (sentinel -2=zero-vector, -1=global,
+ *        data[6]=blkIdx current, data[7..9]=left/up/bottom-right neighbours,
+ *        where left & bottom-right reference the prior-level COPY region offset
+ *        +nBlkX*nBlkY and up references the current (already-searched) neighbour);
+ *        data[10..11]=pred = this block's coarse-level MV (copied to vectors_copy);
+ *        dataf[0..3]=penalties, dataf[4]=lambda (0 on row 0).
+ *      The CUDA SearchBlock (data[12]+dataf[5]) is passed here as two flat int
+ *      arrays with per-block strides 12 and 5.  blockIdx.z batching + prog/next
+ *      row offsets are dropped (host passes per-batch pointers; prog[] is a
+ *      per-column vector of length nBlkX). // ALG-VERIFIED below
+ * -------------------------------------------------------------------------*/
+kernel void kt_prepare_search(
+    int nBlkX, int nBlkY, int nBlkSize, int nLogScale,
+    int nLambdaLevel, int lsad,
+    int penaltyZero, int penaltyGlobal, int penaltyNew,
+    int nPel, int nPad, int nBlkSizeOvr,
+    int nExtendedWidth, int nExtendedHeight,
+    __global const int2* __restrict vectors,
+    __global const int*   __restrict sads,
+    __global       int2* __restrict vectors_copy,
+    __global       int*  __restrict dst_data,   /* stride 12 per block */
+    __global       int*  __restrict dst_dataf,  /* stride 5 per block  */
+    __global       int*  __restrict prog,
+    __global       int*  __restrict next)
+{
+    int bx = (int)get_global_id(0);
+    int by = (int)get_global_id(1);
+
+    if (bx < nBlkX && by < nBlkY) {
+        int blkIdx = bx + by * nBlkX;
+        int sad = sads[blkIdx];
+        __global int* data = dst_data + blkIdx * 12;
+        __global int* dataf = dst_dataf + blkIdx * 5;
+
+        /* progress/counter init on row 0 (column 0 also zeroes *next) */
+        if (by == 0) {
+            prog[bx] = -1;
+            if (bx == 0)
+                *next = 0;
+        }
+
+        int x = nPad + nBlkSizeOvr * bx;
+        int y = nPad + nBlkSizeOvr * by;
+        int nPaddingScaled = nPad >> nLogScale;
+
+        int nDxMax = nPel * (nExtendedWidth  - x - nBlkSize - nPad + nPaddingScaled) - 1;
+        int nDyMax = nPel * (nExtendedHeight - y - nBlkSize - nPad + nPaddingScaled) - 1;
+        int nDxMin = -nPel * (x - nPad + nPaddingScaled);
+        int nDyMin = -nPel * (y - nPad + nPaddingScaled);
+
+        data[0] = nDxMax;
+        data[1] = nDyMax;
+        data[2] = nDxMin;
+        data[3] = nDyMin;
+
+        int p1 = -2;            /* -2 -> zero vector */
+        if (bx > 0)             /* ANALYZE_SYNC == 1 */
+            p1 = blkIdx - 1 + nBlkX * nBlkY;   /* copy-region (prior-level) left */
+
+        int p2 = -2;
+        if (by > 0)
+            p2 = blkIdx - nBlkX;               /* current up neighbour */
+        else
+            p2 = p1;                           /* let median pick left */
+
+        int p3 = -2;
+        if ((by < nBlkY - 1) && (bx < nBlkX - 1))
+            p3 = blkIdx + nBlkX + 1 + nBlkX * nBlkY; /* copy-region bottom-right */
+
+        data[4] = -2;           /* zero */
+        data[5] = -1;           /* global */
+        data[6] = blkIdx;       /* predictor (current) */
+        data[7] = p1;           /* predictors[1] */
+        data[8] = p2;           /* predictors[2] */
+        data[9] = p3;           /* predictors[3] */
+
+        int2 pred = vectors[blkIdx];
+        vectors_copy[blkIdx] = pred;   /* keep prior-level vector for search */
+        data[10] = pred.x;
+        data[11] = pred.y;
+
+        dataf[0] = penaltyZero;
+        dataf[1] = penaltyGlobal;
+        dataf[2] = 0;
+        dataf[3] = penaltyNew;
+
+        int lambda = nLambdaLevel * lsad / (lsad + (sad >> 1))
+                   * lsad / (lsad + (sad >> 1));
+        if (by == 0)
+            lambda = 0;
+        dataf[4] = lambda;
+    }
+}

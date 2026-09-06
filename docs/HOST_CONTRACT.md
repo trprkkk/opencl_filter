@@ -84,6 +84,7 @@ global size; each kernel also guards `x<… && y<…`.
 | `kt_mean_global_mv` | 2D `(1, nRows)` | vectors:`const int2*`,`vectorsPitch`,`nVec`, globalMVec:`int2*` | row r at `vectors + r*vectorsPitch`. |
 | `kt_most_freq_mv` | 2D `(1, nRows)` | vectors:`const int2*`,`vectorsPitch`,`nVec`,`isY`, globalMVec:`int2*` | mode seed; RIG-VERIFY tie-break (see §5). |
 | `kt_prepare_search` | 2D `(nBlkX,nBlkY)` | scalar block `nBlkX,nBlkY,nBlkSize,nLogScale,nLambdaLevel,lsad,penaltyZero,penaltyGlobal,penaltyNew,nPel,nPad,nBlkSizeOvr,nExtendedWidth,nExtendedHeight`, then vectors:`const int2*`, sads:`const int*`, vectors_copy:`int2*`, dst_data:`int*`(stride 12/blk), dst_dataf:`int*`(stride 5/blk), prog:`int*`, next:`int*` | `dst_data+dst_dataf` replace CUDA `SearchBlock`; `prog` length `nBlkX`, `next` scalar. |
+| `kt_rb2b_bilinear_filtered` | 2D `(nWidth, nHeight)` | src:`const PX*` `src_pitch`, dst:PX* `dst_pitch`, `nWidth`,`nHeight` | 1:2 downsample; src plane is 2·nWidth × 2·nHeight. |
 | `kt_load_mv` | 1D `nBlk` | in:`const int3*`, vectors:`int2*`, sads:`int*`, `nBlk` | |
 | `kt_store_mv` | 1D `nBlk` | dst:`int3*`, vectors:`const int2*`, sads:`const int*`, `nBlk` | |
 | `kt_init_const_vec` | 2D `(2, nRows)` | vectors:`int2*`,`vectorsPitch`, globalMV:`const int2*`, `nPel` | slot `-2`=(0,0) if gid0==0 else slot `-1`=globalMV·nPel at row base. Host must leave 2 sentinel slots before each row. |

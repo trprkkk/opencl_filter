@@ -638,3 +638,73 @@ kernel void kt_most_freq_mv(
     else
         globalMVec[row].x = bestVal;
 }
+
+/* ---------------------------------------------------------------------------
+ * M19. kl_RB2B_bilinear_filtered — anti-aliased 1:2 downsample of a source
+ *      plane (source 2*nWidth x 2*nHeight -> dst nWidth x nHeight) using the
+ *      separable (1,3,3,1)/8 = {1/8,3/8,3/8,1/8} half-band filter (Fizick),
+ *      used by KMSuper to build reduced analysis planes (MV.cpp ReduceTo).
+ *
+ *      The upstream CUDA kernel (kl_RB2B_bilinear_filtered) is a *separable*
+ *      two-phase filter fused with a shared tile: a vertical phase halves the
+ *      height, then an in-place horizontal phase halves the width, each phase
+ *      rounding separately (top/bottom edge: (a+b+1)>>1, interior:
+ *      (a + 3b + 3c + d + 4)/8).  Because the two phases only ever combine, per
+ *      output pixel, a bounded 2*2 source region, this single kernel recomputes
+ *      the vertical result for the (<=4) intermediate columns each output pixel
+ *      needs and then applies the horizontal phase — reproducing the CPU
+ *      reference (RB2BilinearFiltered) bit-for-bit with the same two roundings,
+ *      without an intermediate buffer.
+ *
+ *      Out(x,y):  intermediate col k = (2x-1..2x+2 interior, else 2x,2x+1); each
+ *      vertical val V(y,col): y==0 or y==nHeight-1 edge => rows 2y,2y+1 averaged
+ *      (top row uses rows 0,1), else interior => rows 2y-1,2y,2y+1,2y+2 with
+ *      (1,3,3,1)/8.  // ALG-VERIFIED below
+ * -------------------------------------------------------------------------*/
+static int kt_rb2b_vertical(__global const PX* __restrict src, int src_pitch,
+                            int col, int y, int nHeight)
+{
+    if (y == 0) {
+        int a = (int)src[col];
+        int b = (int)src[col + src_pitch];
+        return (a + b + 1) >> 1;
+    }
+    if (y < nHeight - 1) {
+        int r0 = (int)src[col + (2 * y - 1) * src_pitch];
+        int r1 = (int)src[col + (2 * y)     * src_pitch];
+        int r2 = (int)src[col + (2 * y + 1) * src_pitch];
+        int r3 = (int)src[col + (2 * y + 2) * src_pitch];
+        return (r0 + r1 * 3 + r2 * 3 + r3 + 4) / 8;
+    }
+    /* y == nHeight - 1 : bottom edge */
+    {
+        int a = (int)src[col + (2 * y)     * src_pitch];
+        int b = (int)src[col + (2 * y + 1) * src_pitch];
+        return (a + b + 1) >> 1;
+    }
+}
+
+kernel void kt_rb2b_bilinear_filtered(
+    __global const PX* __restrict src, int src_pitch,
+    __global       PX* __restrict dst, int dst_pitch,
+    int nWidth, int nHeight)
+{
+    int x = (int)get_global_id(0);
+    int y = (int)get_global_id(1);
+    if (x < nWidth && y < nHeight) {
+        int v;
+        if (x == 0 || x == nWidth - 1) {
+            /* edge: average the two intermediate columns 2x and 2x+1 */
+            int a = kt_rb2b_vertical(src, src_pitch, 2 * x,     y, nHeight);
+            int b = kt_rb2b_vertical(src, src_pitch, 2 * x + 1, y, nHeight);
+            v = (a + b + 1) >> 1;
+        } else {
+            int a = kt_rb2b_vertical(src, src_pitch, 2 * x - 1, y, nHeight);
+            int b = kt_rb2b_vertical(src, src_pitch, 2 * x,     y, nHeight);
+            int c = kt_rb2b_vertical(src, src_pitch, 2 * x + 1, y, nHeight);
+            int d = kt_rb2b_vertical(src, src_pitch, 2 * x + 2, y, nHeight);
+            v = (a + b * 3 + c * 3 + d + 4) / 8;
+        }
+        dst[x + y * dst_pitch] = (PX)v;
+    }
+}

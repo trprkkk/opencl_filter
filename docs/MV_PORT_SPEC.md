@@ -139,6 +139,11 @@ per-plane KTGMC kernels.
   recombine VECTOR int3 with the int2-vector + int-sad buffers; write the two
   per-row sentinels slot -2 = zero-vector, slot -1 = globalMV*nPel) is
   ALG-VERIFIED (`run_mv_io.py`, 200 cases).
+  The reduced-plane builder `kt_rb2b_bilinear_filtered` (separable (1,3,3,1)/8
+  anti-aliased 1:2 downsample, KMSuper `ReduceTo`) is ALG-VERIFIED
+  (`run_mv_rb2b.py`, 200 cases): the single-pass OpenCL form recomputes the two
+  separate phase roundings and matches the CPU `RB2BilinearFiltered` reference
+  bit-for-bit.
   Note: upstream `kl_write_default_mv` sets `.x` twice (a typo for `.sad`); we
   implement the intended default.
 - **RIG-VERIFY** (faithful source ports, device run pending): `kt_copy_pad`,

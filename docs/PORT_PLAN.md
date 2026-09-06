@@ -98,14 +98,16 @@ Motion / super-sampling kernels now live in `src/opencl/ktgmc/kernels/ktgmc_moti
 (`kl_write_default_mv`, `kl_scene_change`/`_x2`, `kl_short_to_byte`,
 `kl_short_to_byte_or_copy_src`), the coarse→fine MV upsampler
 `kl_interpolate_prediction`, the global-MV refinement `kl_mean_global_mv`, and
-the per-block search setup `kl_prepare_search` (ANALYZE_SYNC=1), and the MV
-I/O trio `kl_load_mv`/`kl_store_mv`/`kl_init_const_vec`.
+the per-block search setup `kl_prepare_search` (ANALYZE_SYNC=1), the MV
+I/O trio `kl_load_mv`/`kl_store_mv`/`kl_init_const_vec`, and the reduced-plane
+builder `kl_RB2B_bilinear_filtered` (separable 1:2 downsample; `kl_RB2B_...
+_with_pad` direct variant is separate and not yet ported).
 Source-ported (RIG-VERIFY, device run pending):
 `kl_copy_pad`, `kl_pad_frame_h/v`, `kl_init_scene_change`, and
 `kl_most_freq_mv` (smallest-mode; bit-exact vs CUDA except on exact mode ties).
 
 TODO (not yet ported): `kl_logic1/kl_logic3`, `kl_calculate_sad` (block-level),
-`kl_init_sad`, `kl_copy_boarder1(_v)`, `kl_RB2B_bilinear_filtered(_with_pad)`,
+`kl_init_sad`, `kl_copy_boarder1(_v)`, `kl_RB2B_bilinear_filtered_with_pad`,
 the block-search kernels (`Search`, expanding/hex2), `kl_degrain_2x3`,
 `kl_compensate_2x3`, `kl_scene_change*`, `kl_write_default_mv`, and the MV.cpp
 host state machine. `GaussianFilter` (KGaussResize) is already implemented as a

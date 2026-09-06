@@ -44,6 +44,9 @@ add_test(NAME ktgmc_mv_searchprep
 add_test(NAME ktgmc_mv_io
          COMMAND ${CMAKE_COMMAND} -E env
                  python3 ${CMAKE_SOURCE_DIR}/python/run_mv_io.py)
+add_test(NAME ktgmc_mv_rb2b
+         COMMAND ${CMAKE_COMMAND} -E env
+                 python3 ${CMAKE_SOURCE_DIR}/python/run_mv_rb2b.py)
 # Structural parse lint of the .cl kernels (real C parse via lint/oc_shim.h;
 # gcc would otherwise treat .cl as a linker input and skip it). Needs gcc/bash.
 add_test(NAME ktgmc_cl_lint

@@ -17,7 +17,7 @@ KTGMC kernels were. KDeband was chosen first (see docs/PORT_PLAN.md §5).
 
 | File | AVS functions | Port status here |
 |---|---|---|
-| `KDeband.cu` | `KTemporalNR`, `KDeband`, `KEdgeLevel` | **KDeband core done**; **KEdgeLevel done**; KTemporalNR next |
+| `KDeband.cu` | `KTemporalNR`, `KDeband`, `KEdgeLevel` | **KDeband core done**; **KEdgeLevel done**; **KTemporalNR done** |
 | `KFMKernel.cu` | `KPatchCombe`, `KFMSwitch`, `KFMPad`, `KFMDecimate`, `AssumeDevice` | not started |
 | `CombingAnalyze.cu` | `KFMSuper`, `KCleanSuper`, `KPreCycleAnalyze(_Show)`, `KFMSuperShow`, `KTelecine(_Super)`, `KSwitchFlag`, `KContainsCombe`, `KCombeMask`, `KRemoveCombe` | not started |
 | `Deblock.cu` | `KDeblock`, `QPClip`, `ShowQP`, `FrameType` | not started |
@@ -99,13 +99,42 @@ multi-pass/host loops are recorded here as notes only; each `.cl` kernel is a
 single-plane / single-iteration transliteration verified on a self-consistent
 (source-dims) configuration.
 
+### `KTemporalNR` (kf_temporal_nr, src/opencl/kfm/kernels/kfm_temporalnr.cl)
+
+Temporal noise reducer, faithful to the authoritative CPU twin `cpu_temporal_nr`
+(= CUDA `kl_temporal_nr` arithmetic) in `KDeband.cu`. Column-wise / per-pixel:
+for the pixel at (x,y), centre = `frames[mid]`; it averages the pixels at the
+same location across the `nframes = 2*dist+1` frames whose value is within
+`thresh` of the centre (`count += 1; sum += ref` when `absdiff(ref,centre)
+<= thresh`), then `avg = (float)sum/count + 0.5f` and truncates
+(`// ALG-VERIFIED` via `python/run_kfm_temporalnr.py`, 300 cases: CPU mirror
+`sim/kfm_temporalnr_ref.cpp` vs an independent float32-exact Python golden,
+dist 0-6 / 8-16-bit / thresh sweeps). `count` is always ≥1 (the centre frame
+gives diff 0 ≤ thresh), so no division-by-zero and no explicit clamp is needed
+(matches the CPU twin). Because each output element reads only its own column,
+the CUDA 1- vs 4-wide vectorisation is irrelevant — a scalar port is identical.
+
+Two fidelity notes (host / device seams):
+- **Layout**: the CUDA host launches once *per plane* passing a
+  `TemporalNRPtrs` holding `nframes` separate input pointers. OpenCL takes the
+  planes packed into one buffer (`plane i` at `i*frame_stride`); per-pixel
+  arithmetic is identical, only the pointer-array vs packed-frame host layout
+  differs.
+- **Division**: this OpenCL transliteration (like `cpu_temporal_nr`) uses normal
+  float32 `/`. The real CUDA *device* kernel uses the approximate `__fdividef`
+  (≤ ~2 ulp error), a CUDA-specific hardware-division intrinsic with no OpenCL
+  equivalent; it can differ from correctly-rounded division only at a rounding
+  boundary. OpenCL `/` mirrors the CPU reference (which is what ALG-VERIFIED
+  checks against); a rig comparing against literal CUDA device output would need
+  `-cl-fp32-correctly-rounded-enabled` (best effort) and is a `// RIG-VERIFY`
+  item (~ulp-level, not algorithmic).
+
 ## Next candidates (verifiable in this sandbox)
 
-- `KTemporalNR` (`kl_temporal_nr` + `cpu_temporal_nr`) — temporal averaging over
-  `nframes` with `mid`; deterministic, but its `average_pixel` uses float32
-  `(int)(sum/cnt + 0.5f)` so a faithful/bit-exact cross-check needs the mirror
-  AND golden to use float32 division (not double) — model with numpy float32.
 - `kl_copy` / `kl_fill` helpers (already covered generically by KTGMC `kt_copy`).
+- Remaining KFM families are in Deblock.cu / CombingAnalyze.cu / DecombeUCF.cu /
+  MergeStatic.cu / KFMKernel.cu (registered in the table above; most need more
+  host glue / motion state, so they are deferred as heavier milestones).
 
 ## Notes / licence
 

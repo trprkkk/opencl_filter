@@ -28,6 +28,7 @@ test: ref lint
 	python3 python/run_mv_degrain.py
 	python3 python/run_kfm_deband.py
 	python3 python/run_kfm_edgelevel.py
+	python3 python/run_kfm_temporalnr.py
 
 clean:
 	rm -rf build

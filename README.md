@@ -19,7 +19,7 @@ buffers and dispatches them, with a scalar CPU reference used for validation.
 |---|---|---|
 | **KTGMC** | QTGMC-style deinterlacer (motion compensated) | In progress — **Milestone 1 done** (see below) |
 | KNNEDI3 | NNEDI3 neural-net upscaler | not started (next candidate) |
-| KFM | filter family (KDeband, Deblock, CombingAnalyze, …) | **KDeband + KEdgeLevel done** (`src/opencl/kfm/kernels/`) |
+| KFM | filter family (KDeband, Deblock, CombingAnalyze, …) | **KDeband + KEdgeLevel + KTemporalNR done** (`src/opencl/kfm/kernels/`) |
 | AvsCUDA / GRunT / masktools | CUDA-aware dispatch + helpers | out of scope unless requested |
 
 A faithful KTGMC port is large: `KTGMC/Kernel.cu` (~3,560 lines) + `MVKernel.cu`
@@ -75,7 +75,7 @@ docs/BLOCKSEARCH_MODEL.md      # KTGMC block-search host model (SearchBatch, sup
 docs/CODEX_HANDOFF.md          # step-by-step recipe for the rig-bound MV remainder
 docs/KFM_PORT_SPEC.md          # KFM filter-family map + verified/next status
 src/opencl/ktgmc/kernels/      # OpenCL kernel sources: KTGMC motion/simple
-src/opencl/kfm/kernels/        # OpenCL kernel sources: KFM (kfm_deband.cl, kfm_edgelevel.cl)
+src/opencl/kfm/kernels/        # OpenCL kernel sources: KFM (deband/edgelevel/temporalnr .cl)
 sim/ktgmc_cpu_ref.cpp          # scalar CPU mirror of the kernels (validates logic)
 python/run_validation.py       # independent Python golden + cross-check harness
 Makefile                       # make test  (no OpenCL required)
@@ -117,7 +117,16 @@ Makefile                       # make test  (no OpenCL required)
   `python/run_kfm_edgelevel.py` (500 cases: CPU mirror
   `sim/kfm_edgelevel_ref.cpp` vs an independent float32-exact Python golden,
   all 8 check/selective/uv combos + repair N=1-4 + to/from444, 8/16-bit).
-  More in `docs/KFM_PORT_SPEC.md`.
+- `kfm_temporalnr.cl`: **KFM KTemporalNR** — `kf_temporal_nr`, faithful to
+  `cpu_temporal_nr` (KFM/KDeband.cu, MIT). Temporal noise reduction: for each
+  pixel averages the same-location pixels across `2*dist+1` frames that are
+  within `thresh` of the centre (`avg = (float)sum/count + 0.5f`). Column-wise,
+  so a scalar port is identical to the CUDA vectorised one. **ALG-VERIFIED** via
+  `python/run_kfm_temporalnr.py` (300 cases: CPU mirror
+  `sim/kfm_temporalnr_ref.cpp` vs an independent float32-exact Python golden,
+  dist 0-6, 8/16-bit). NOTE: OpenCL uses normal fp32 `/` (matches the CPU twin);
+  the real CUDA device kernel uses the approximate `__fdividef` (≈ulp-level CUDA
+  HW nuance, no OpenCL equivalent) — see spec. More in `docs/KFM_PORT_SPEC.md`.
 
 ## How the port is validated (no GPU/OpenCL needed)
 

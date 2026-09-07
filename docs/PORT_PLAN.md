@@ -161,11 +161,12 @@ To get a working deinterlacer you must port the mvtools-equivalent layers:
 
 - **KNNEDI3**: self-contained neural-net 2× scaler; medium-large.
 - **KFM**: MIT → cleanest to reuse/redistribute. **KDeband** (the smallest
-  self-contained filter) was ported first, then **KEdgeLevel**. KDeband's
-  `kf_deband_reduce_banding` and KEdgeLevel's four kernels
-  (`kf_edgelevel`, `kf_edgelevel_repair`, `kf_el_to444`, `kf_el_from444`) are
-  ported and ALG-VERIFIED in `src/opencl/kfm/kernels/kfm_deband.cl` /
-  `kfm_edgelevel.cl`. Full KFM map + next candidates (KTemporalNR, then Deblock /
+  self-contained filter) was ported first, then **KEdgeLevel** and
+  **KTemporalNR**. KDeband's `kf_deband_reduce_banding`, KEdgeLevel's four
+  kernels (`kf_edgelevel`, `kf_edgelevel_repair`, `kf_el_to444`,
+  `kf_el_from444`) and KTemporalNR's `kf_temporal_nr` are ported and
+  ALG-VERIFIED in `src/opencl/kfm/kernels/kfm_deband.cl` / `kfm_edgelevel.cl` /
+  `kfm_temporalnr.cl`. Full KFM map + next candidates (Deblock /
   CombingAnalyze / DecombeUCF / MergeStatic) are in `docs/KFM_PORT_SPEC.md`.
 
 ## 6. AviSynth integration (device glue)

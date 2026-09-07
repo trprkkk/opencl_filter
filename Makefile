@@ -26,6 +26,7 @@ test: ref lint
 	python3 python/run_mv_rb2b.py
 	python3 python/run_mv_rb2b_pad.py
 	python3 python/run_mv_degrain.py
+	python3 python/run_kfm_deband.py
 
 clean:
 	rm -rf build

@@ -19,7 +19,7 @@ buffers and dispatches them, with a scalar CPU reference used for validation.
 |---|---|---|
 | **KTGMC** | QTGMC-style deinterlacer (motion compensated) | In progress — **Milestone 1 done** (see below) |
 | KNNEDI3 | NNEDI3 neural-net upscaler | not started (next candidate) |
-| KFM | filter family (KDeband, Deblock, CombingAnalyze, …) | not started |
+| KFM | filter family (KDeband, Deblock, CombingAnalyze, …) | **started — KDeband core done** (`src/opencl/kfm/kernels/kfm_deband.cl`) |
 | AvsCUDA / GRunT / masktools | CUDA-aware dispatch + helpers | out of scope unless requested |
 
 A faithful KTGMC port is large: `KTGMC/Kernel.cu` (~3,560 lines) + `MVKernel.cu`
@@ -73,7 +73,9 @@ docs/MV_PORT_SPEC.md           # motion-engine data model + kernel inventory + r
 docs/HOST_CONTRACT.md          # on-rig OpenCL host runner spec (builds, grids, buffer layout)
 docs/BLOCKSEARCH_MODEL.md      # KTGMC block-search host model (SearchBatch, super-frame, CPU_EMU)
 docs/CODEX_HANDOFF.md          # step-by-step recipe for the rig-bound MV remainder
-src/opencl/ktgmc/kernels/      # OpenCL kernel sources (.cl)
+docs/KFM_PORT_SPEC.md          # KFM filter-family map + verified/next status
+src/opencl/ktgmc/kernels/      # OpenCL kernel sources: KTGMC motion/simple
+src/opencl/kfm/kernels/        # OpenCL kernel sources: KFM (kfm_deband.cl)
 sim/ktgmc_cpu_ref.cpp          # scalar CPU mirror of the kernels (validates logic)
 python/run_validation.py       # independent Python golden + cross-check harness
 Makefile                       # make test  (no OpenCL required)
@@ -101,6 +103,11 @@ Makefile                       # make test  (no OpenCL required)
   `docs/BLOCKSEARCH_MODEL.md`). The remaining search / degrain-block /
   compensate kernels need the MV.cpp host state machine + super-frame sub-pel
   layout (see `docs/MV_PORT_SPEC.md`, `docs/CODEX_HANDOFF.md`).
+- `kfm_deband.cl`: **KFM KDeband core** — `kf_deband_reduce_banding`, faithful to
+  the authoritative CPU twin `cpu_reduce_banding` (KFM/KDeband.cu, MIT).
+  **ALG-VERIFIED** via `python/run_kfm_deband.py` (300 cases: verbatim CPU
+  mirror `sim/kfm_deband_ref.cpp` vs independent Python golden; sample modes
+  0-2, blur_first, 8/16-bit). More in `docs/KFM_PORT_SPEC.md`.
 
 ## How the port is validated (no GPU/OpenCL needed)
 

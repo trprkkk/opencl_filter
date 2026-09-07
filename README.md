@@ -19,7 +19,7 @@ buffers and dispatches them, with a scalar CPU reference used for validation.
 |---|---|---|
 | **KTGMC** | QTGMC-style deinterlacer (motion compensated) | In progress — **Milestone 1 done** (see below) |
 | KNNEDI3 | NNEDI3 neural-net upscaler | not started (next candidate) |
-| KFM | filter family (KDeband, Deblock, CombingAnalyze, …) | **started — KDeband core done** (`src/opencl/kfm/kernels/kfm_deband.cl`) |
+| KFM | filter family (KDeband, Deblock, CombingAnalyze, …) | **KDeband + KEdgeLevel done** (`src/opencl/kfm/kernels/`) |
 | AvsCUDA / GRunT / masktools | CUDA-aware dispatch + helpers | out of scope unless requested |
 
 A faithful KTGMC port is large: `KTGMC/Kernel.cu` (~3,560 lines) + `MVKernel.cu`
@@ -75,7 +75,7 @@ docs/BLOCKSEARCH_MODEL.md      # KTGMC block-search host model (SearchBatch, sup
 docs/CODEX_HANDOFF.md          # step-by-step recipe for the rig-bound MV remainder
 docs/KFM_PORT_SPEC.md          # KFM filter-family map + verified/next status
 src/opencl/ktgmc/kernels/      # OpenCL kernel sources: KTGMC motion/simple
-src/opencl/kfm/kernels/        # OpenCL kernel sources: KFM (kfm_deband.cl)
+src/opencl/kfm/kernels/        # OpenCL kernel sources: KFM (kfm_deband.cl, kfm_edgelevel.cl)
 sim/ktgmc_cpu_ref.cpp          # scalar CPU mirror of the kernels (validates logic)
 python/run_validation.py       # independent Python golden + cross-check harness
 Makefile                       # make test  (no OpenCL required)
@@ -107,7 +107,17 @@ Makefile                       # make test  (no OpenCL required)
   the authoritative CPU twin `cpu_reduce_banding` (KFM/KDeband.cu, MIT).
   **ALG-VERIFIED** via `python/run_kfm_deband.py` (300 cases: verbatim CPU
   mirror `sim/kfm_deband_ref.cpp` vs independent Python golden; sample modes
-  0-2, blur_first, 8/16-bit). More in `docs/KFM_PORT_SPEC.md`.
+  0-2, blur_first, 8/16-bit).
+- `kfm_edgelevel.cl`: **KFM KEdgeLevel** — `kf_edgelevel`,
+  `kf_edgelevel_repair`, `kf_el_to444`, `kf_el_from444`, faithful to their CPU
+  twins in KFM/KDeband.cu (MIT). Edge detection/enhance + visualise (`check`),
+  the 3×3 `repair` limiter (interior ALG-VERIFIED; border needs a padded plane
+  on the rig), and the 4:2:x↔4:4:4 chroma pack/unpack helpers. Float math is
+  IEEE float32 with no FMA contraction. **ALG-VERIFIED** via
+  `python/run_kfm_edgelevel.py` (500 cases: CPU mirror
+  `sim/kfm_edgelevel_ref.cpp` vs an independent float32-exact Python golden,
+  all 8 check/selective/uv combos + repair N=1-4 + to/from444, 8/16-bit).
+  More in `docs/KFM_PORT_SPEC.md`.
 
 ## How the port is validated (no GPU/OpenCL needed)
 

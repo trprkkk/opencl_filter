@@ -17,7 +17,7 @@ KTGMC kernels were. KDeband was chosen first (see docs/PORT_PLAN.md §5).
 
 | File | AVS functions | Port status here |
 |---|---|---|
-| `KDeband.cu` | `KTemporalNR`, `KDeband`, `KEdgeLevel` | **KDeband core done**; KTemporalNR & KEdgeLevel next |
+| `KDeband.cu` | `KTemporalNR`, `KDeband`, `KEdgeLevel` | **KDeband core done**; **KEdgeLevel done**; KTemporalNR next |
 | `KFMKernel.cu` | `KPatchCombe`, `KFMSwitch`, `KFMPad`, `KFMDecimate`, `AssumeDevice` | not started |
 | `CombingAnalyze.cu` | `KFMSuper`, `KCleanSuper`, `KPreCycleAnalyze(_Show)`, `KFMSuperShow`, `KTelecine(_Super)`, `KSwitchFlag`, `KContainsCombe`, `KCombeMask`, `KRemoveCombe` | not started |
 | `Deblock.cu` | `KDeblock`, `QPClip`, `ShowQP`, `FrameType` | not started |
@@ -46,11 +46,61 @@ from the luma-plane dimensions and reuses it per plane with each plane's own
 `width*height` stride; the `offset = y*pitch+x` rand indexing stays in bounds
 when per-plane `pitch == per-plane width`, which is the assumed/host config.
 
+### `KEdgeLevel` (kf_edgelevel / kf_edgelevel_repair / kf_el_to444 /
+kf_el_from444, src/opencl/kfm/kernels/kfm_edgelevel.cl)
+
+The edge-enhancement/visualisation filter. Four kernels are ported together
+(they are the compose/decompose helpers KEdgeLevel drives on its uv path). All
+are `// ALG-VERIFIED` via `python/run_kfm_edgelevel.py` (500 cases), which
+cross-checks the CPU mirror `sim/kfm_edgelevel_ref.cpp` (faithful to the
+authoritative CPU twins `cpu_edgelevel`, `cpu_edgelevel_repair`,
+`cpu_el_from444`; for `el_to444` it replicates the CUDA `kl_el_to444`, which
+differs from `cpu_el_to444` only via a border-clamp) against an independent
+Python golden.
+
+- `kf_edgelevel` — border ring (`<=1+selective` px in) copies through (check ?
+  `SCALE(EDGE_CHECK_NONE=16)` : src); interior scans a horizontal and vertical
+  window of radius `2+selective` around each pixel, keeps the axis with the
+  larger min/max spread, and in selective mode records the max consecutive
+  gradient `hdiffmax`; `rdiff = hdiffmax/(float)(hmax-hmin)`,
+  `factor = clamp((0.55f-rdiff)*10,0,1) - clamp((0.35f-rdiff)*10,0,1)`
+  (selective) else `1.0f`. When `spread > thrs && factor>0`:
+  - check (visualise): `src>avg ? (factor==1?WHITE(50):BRIGHT(120))
+    : (factor==1?BLACK(240):DARK(180))`, else `SCALE(NONE=16)`.
+  - enhance: `factorY=(str*factor)*0.0625f`;
+    `dst = clamp(src + (int)((src-avg)*factorY), hmin, hmax)` then
+    `clamp(0,maxv)`; uv planes use `factorUV=strUV*0.0625f` with the plane-local
+    min/max of `dev_el_min_max` (same 5/7-sample window).
+  All float work is IEEE float32 with no FMA contraction; the mirror is built
+  `-ffp-contract=off` and the Python golden emulates float32 per operation, so
+  results are bit-exact.
+- `kf_edgelevel_repair` — fixed N (`3` upstream). When `el != src`, collects the
+  eight 3×3 neighbours, sorts them (Batcher odd-even 8-element network,
+  `IntCompareAndSwap`), and `dst = clamp(el, min(src,a[N-1]),
+  max(src,a[8-N]))`; else copies src. The CUDA/CPU originals read the full 3×3
+  window with no border guard (borders rely on the padded AviSynth plane), so
+  this kernel is ALG-VERIFIED over the interior `(1..width-2, 1..height-2)`;
+  the border ring needs a padded source on the rig (`// RIG-VERIFY` there).
+- `kf_el_to444` — bilinear chroma up-sampler (`BW=1<<logUVx`, `BH=1<<logUVy`):
+  `(v00+v10+1)>>1`, `(v00+v01+1)>>1`, `(v00+v10+v01+v11+2)>>2`, with the last
+  row/col edge-replicated (the CUDA guards `x+1<width` / `y+1<height` fall back
+  to `v00`). Grid is source `(width,height)` dims; dst is `BW*width × BH*height`.
+- `kf_el_from444` — chroma down-sample: `dst[x+y*dstPitch] =
+  src[BW*x + BH*y*srcPitch]`.
+
+Host seam (multi-pass / 4:2:x): KEdgeLevel's real `GetFrameT` runs up to
+`numel=max((repair+1)/2,1)` strengthening passes (dst/tmp swap), then `repair`
+passes of `edgelevel_repair<3>`, selects per-iteration behaviour by
+`table_idx = ((show&&last)?4:0)+(repair>0?2:0)+(uv?1:0)` over the 8 template
+tuples (check × selective × uv), and up/down-converts U/V to/from 4:4:4 via
+`el_to444`/`el_from444` so edgelevel can sharpen chroma; the subsampled-plane
+sizes passed to those helpers are host-determined (a `logUVx/y` seam). Those
+multi-pass/host loops are recorded here as notes only; each `.cl` kernel is a
+single-plane / single-iteration transliteration verified on a self-consistent
+(source-dims) configuration.
+
 ## Next candidates (verifiable in this sandbox)
 
-- `KEdgeLevel` (`kl_edgelevel`/`_repair`, `kl_el_to444`/`from444`) — per-pixel
-  edge map; has `cpu_edgelevel` CPU twins. Larger (edgelevel + repair + 4:4:4
-  pack/unpack), but deterministic integer.
 - `KTemporalNR` (`kl_temporal_nr` + `cpu_temporal_nr`) — temporal averaging over
   `nframes` with `mid`; deterministic, but its `average_pixel` uses float32
   `(int)(sum/cnt + 0.5f)` so a faithful/bit-exact cross-check needs the mirror

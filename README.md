@@ -72,6 +72,7 @@ docs/PORT_PLAN.md              # port strategy + per-kernel roadmap + licensing
 docs/MV_PORT_SPEC.md           # motion-engine data model + kernel inventory + rig test plan
 docs/HOST_CONTRACT.md          # on-rig OpenCL host runner spec (builds, grids, buffer layout)
 docs/BLOCKSEARCH_MODEL.md      # KTGMC block-search host model (SearchBatch, super-frame, CPU_EMU)
+docs/CODEX_HANDOFF.md          # step-by-step recipe for the rig-bound MV remainder
 src/opencl/ktgmc/kernels/      # OpenCL kernel sources (.cl)
 sim/ktgmc_cpu_ref.cpp          # scalar CPU mirror of the kernels (validates logic)
 python/run_validation.py       # independent Python golden + cross-check harness
@@ -91,12 +92,15 @@ Makefile                       # make test  (no OpenCL required)
   `kt_load_mv`/`kt_store_mv`/`kt_load_mv_batch`/`kt_init_const_vec`, and both
   reduced-plane builders `kt_rb2b_bilinear_filtered` (separable) and
   `kt_rb2b_bilinear_filtered_with_pad` (CUDA-only fused twin that also fills the
-  hpad/vpad border). **RIG-VERIFY** (device run pending): frame padding /
-  mirror copy, `kt_most_freq_mv` (smallest-mode seed), the block-search pure
-  helpers, and the first block-level kernel `kt_calc_all_sad` (per-block SAD;
-  host model in `docs/BLOCKSEARCH_MODEL.md`). The remaining search /
-  degrain-block / compensate kernels need the MV.cpp host state machine +
-  super-frame sub-pel layout (see `docs/MV_PORT_SPEC.md`).
+  hpad/vpad border), and the degrain/compensate pixel-combiner core
+  `kt_degrain_patch` + `kt_overlap_out` (the full Degrain1to6_C/Overlaps_C/
+  Short2Bytes overlap arithmetic, ALG-VERIFIED vs the MV.cpp staging mirror).
+  **RIG-VERIFY** (device run pending): frame padding / mirror copy,
+  `kt_most_freq_mv` (smallest-mode seed), the block-search pure helpers, and the
+  first block-level kernel `kt_calc_all_sad` (per-block SAD; host model in
+  `docs/BLOCKSEARCH_MODEL.md`). The remaining search / degrain-block /
+  compensate kernels need the MV.cpp host state machine + super-frame sub-pel
+  layout (see `docs/MV_PORT_SPEC.md`, `docs/CODEX_HANDOFF.md`).
 
 ## How the port is validated (no GPU/OpenCL needed)
 

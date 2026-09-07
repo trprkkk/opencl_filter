@@ -90,6 +90,8 @@ global size; each kernel also guards `x<… && y<…`.
 | `kt_load_mv` | 1D `nBlk` | in:`const int3*`, vectors:`int2*`, sads:`int*`, `nBlk` | |
 | `kt_store_mv` | 1D `nBlk` | dst:`int3*`, vectors:`const int2*`, sads:`const int*`, `nBlk` | |
 | `kt_load_mv_batch` | 1D `nBlk` | out:`int3*`, src:`const int3*`, vectors:`int2*`, sads:`int*`, `nBlk` | per-batch MV split; out[x]=src[x] copy-through. |
+| `kt_degrain_patch` | 3D `(nBlkSize, nBlkSize, nBlkX*nBlkY)` | src:PX* `src_pitch`, `nBlkX,nBlkY,nBlkSize,stepX,stepY,delta`, WSrcArr:`int*`(nBlk), WFArr/WBArr/refBaseF/refBaseB:`int*`(delta·nBlk), refFPlane/refBPlane:PX* `refF_pitch/refB_pitch`, patch:PX* | per-block Degrain1to6_C patch value; refBase indexed `k*nBlk+blk` (rig seam). ALG-VERIFIED math. |
+| `kt_overlap_out` | 2D `(width,height)` | src:PX* `src_pitch`, patch:PX* `patch_stride`, `nBlkX,nBlkY,nBlkSize,stepX,stepY,overlapX,overlapY`, winBase:`short*` `win_stride`, `width,height`, dst:PX* `dst_pitch` | feathered Overlaps_C + Short2Bytes per output pixel + edge src copy. ALG-VERIFIED math. |
 | `kt_init_const_vec` | 2D `(2, nRows)` | vectors:`int2*`,`vectorsPitch`, globalMV:`const int2*`, `nPel` | slot `-2`=(0,0) if gid0==0 else slot `-1`=globalMV·nPel at row base. Host must leave 2 sentinel slots before each row. |
 
 ### Program A — `ktgmc_simple.cl`

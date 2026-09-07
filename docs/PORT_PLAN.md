@@ -112,15 +112,15 @@ pure helpers `dev_clip_mv`/`dev_check_mv`/`dev_sq_norm`/`dev_get_ref_block`,
 and the first block-level kernel `kl_calc_all_sad` (per-block SAD vs the
 MV-selected ref block; host model in `docs/BLOCKSEARCH_MODEL.md`).
 
-TODO (not yet ported):
+TODO (not yet ported, device-bound — see `docs/CODEX_HANDOFF.md`):
 the block-search driver kernels (`Search`, expanding/hex2, `dev_read_pixels`,
-`dev_calc_sad`, `MinCost`, `dev_reduce_result`), the degrain / compensate
-per-pixel stack (`kl_prepare_degrain`, `kl_degrain_2x3`, `kl_prepare_compensate`,
-`kl_compensate_2x3`), and the MV.cpp host state machine (see
-`docs/BLOCKSEARCH_MODEL.md` §8 and `docs/MV_PORT_SPEC.md` §6.1 for the exact
-items that block these — the block-geometry / super-plane pel model, the 9
-feathered `OverlapWindows`, and the `(nPatternX,nPatternY,M)` global-tmp launch
-geometry that the `_2x3` kernels are defined by).
+`dev_calc_sad`, `MinCost`, `dev_reduce_result`) and the degrain / compensate
+host wiring (`kl_prepare_degrain`, `kl_degrain_2x3`, `kl_prepare_compensate`,
+`kl_compensate_2x3`), plus the MV.cpp host state machine.  Their *integer math*
+is now covered: the ALG-VERIFIED `kt_degrain_patch` + `kt_overlap_out`
+combiner reproduces the overlap path, and only the MV.cpp `KMPlane`
+`nPel`/padding pel-model + `(nPatternX,nPatternY,M)` host launch geometry block
+them (see `docs/MV_PORT_SPEC.md` §6.1/§6.2 and `docs/BLOCKSEARCH_MODEL.md` §8).
 
 The `Kernel.cu` no-motion AVS filter-function kernels are all covered by
 `ktgmc_simple.cl` already. Of the extra names there, `kl_logic1`/`kl_logic3`

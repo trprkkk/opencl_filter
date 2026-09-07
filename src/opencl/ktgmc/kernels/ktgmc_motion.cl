@@ -956,3 +956,141 @@ kernel void kt_calc_all_sad(
     out[bx + by * nBlkX].y = xy.y;
     out[bx + by * nBlkX].z = sad;
 }
+
+/* ---------------------------------------------------------------------------
+ * M22/M23. Degrain/compensate pixel-combiner core — the verifiable (layer-B)
+ * arithmetic of the KMDegrain / KMCompensate overlap path (MV.cpp
+ * Degrain1to6_C + Overlaps_C + Short2Bytes).  These two kernels reproduce that
+ * integer math exactly; the ONLY thing they leave to the host / rig is the
+ * per-block reference-plane element OFFSET (the "fetch"), which MV.cpp derives
+ * as pPlane->GetPointer(block.x*nPel + mv.x, ...) over the super-frame plane
+ * stack (KMPlane::SetTarget stacks nPel*nPel sub-pel planes nPitch*nExtendedHeight
+ * apart; GetPointer adds the nHPadPel/nVPadPel padding and folds the pel plane
+ * index).  That fetch resolves to a plain base element offset, which is what the
+ * host passes in refBaseB/refBaseF (delta*nBlk elements); the block then reads
+ * ref[base + local] exactly as the CPU DEGRAIN reads pB[local].  So the ref-pixel
+ * *values* and every weight/rounding below are fully verified; only the mapping
+ * MV-plane -> base-offset stays host-side (docs/MV_PORT_SPEC.md 6.1).
+ *
+ * Geometry is the MV.cpp CPU basis: block (bx,by) spans src columns
+ * [bx*StepX, bx*StepX+nBlkSizeX) (StepX = nBlkSizeX - overlapX), so block step
+ * is StepX (NOT nBlkSize/2 — see 6.1 for the device/CPU basis discrepancy).
+ *
+ * M22. kt_degrain_patch: for each block x local pixel, combine the source pixel
+ *      with delta forward/backward reference pixels under WSrc/WRef weights and
+ *      produce the degrained patch value (Degrain1to6_C):
+ *        val = src*WSrc + sum_k (refF_k*WRefF_k + refB_k*WRefB_k)
+ *        out = (val + (16-bit ? 0 : 128)) >> 8
+ *      Grid = (nBlkSizeX, nBlkSizeY, nBlkX*nBlkY).
+ *
+ * M23. kt_overlap_out: for each output pixel of the plane, sum the feathered
+ *      window-weighted contributions of every covering block, then shift to a
+ *      byte (Overlaps_C + Short2Bytes):
+ *        8-bit : tmp += (patchVal*win + 256) >> 6  ;  out = min(maxv, tmp>>5)
+ *        16-bit: tmp +=  patchVal*win              ;  out = min(maxv, tmp>>11)
+ *      where win = window[ (wby+wbx)*nBlkSizeX*nBlkSizeY + local ] and
+ *      wby = 3*((by+nBlkY-3)/(nBlkY-2)), wbx = (bx+nBlkX-3)/(nBlkX-2) select
+ *      one of the 9 feathered windows.  Pixels outside the block-covered region
+ *      (>= nBlkX*StepX+overlapX / ... ) are a straight source copy (the CPU
+ *      COPY edge fill).  Because a block's own degrained patch is first computed
+ *      into an int (8-bit per-term rounding is applied block-locally then
+ *      summed), the sum over the (<= 2x2) covering blocks is order-independent.
+ *
+ *      Verifiable in-sandbox because, given the resolved refBase offsets + planes,
+ *      the whole thing is deterministic integer arithmetic cross-checked three
+ *      ways (python/run_mv_degrain.py: .cl-equivalent per-pixel golden vs a
+ *      faithful MV.cpp staging mirror in sim/ktgmc_degrain_ref.cpp).  The
+ *      per-plane PX instantiation keeps 8/16-bit sample ranges correct.
+ *      // ALG-VERIFIED (arithmetic; ref-plane base mapping is the host seam)
+ * -------------------------------------------------------------------------*/
+kernel void kt_degrain_patch(
+    __global const PX* __restrict src, int src_pitch,
+    int nBlkX, int nBlkY, int nBlkSize, int stepX, int stepY, int delta,
+    __global const int* __restrict WSrcArr,          /* nBlkX*nBlkY            */
+    __global const int* __restrict WFArr,            /* delta*nBlkX*nBlkY      */
+    __global const int* __restrict WBArr,            /* delta*nBlkX*nBlkY      */
+    __global const int* __restrict refBaseF,         /* delta*nBlkX*nBlkY      */
+    __global const int* __restrict refBaseB,         /* delta*nBlkX*nBlkY      */
+    __global const PX* __restrict refFPlane, int refF_pitch,
+    __global const PX* __restrict refBPlane, int refB_pitch,
+    __global       PX* __restrict patch)            /* nBlk*size*size         */
+{
+    int lx = (int)get_global_id(0);
+    int ly = (int)get_global_id(1);
+    int blk = (int)get_global_id(2);
+    int nBlk = nBlkX * nBlkY;
+    if (lx >= nBlkSize || ly >= nBlkSize || blk >= nBlk)
+        return;
+
+    int bx = blk % nBlkX;
+    int by = blk / nBlkX;
+
+    int val = (int)src[(bx * stepX + lx) + (by * stepY + ly) * src_pitch]
+            * WSrcArr[blk];
+    for (int k = 0; k < delta; k++) {
+        int offB = k * nBlk + blk;
+        val += (int)refBPlane[refBaseB[offB] + lx + ly * refB_pitch]
+             * WBArr[offB];
+        val += (int)refFPlane[refBaseF[offB] + lx + ly * refF_pitch]
+             * WFArr[offB];
+    }
+
+    int dg = (val + (PX_MAX > 255 ? 0 : 128)) >> 8;
+    patch[blk * (nBlkSize * nBlkSize) + ly * nBlkSize + lx] = (PX)dg;
+}
+
+kernel void kt_overlap_out(
+    __global const PX* __restrict src, int src_pitch,
+    __global const PX* __restrict patch, int patch_stride,   /* nBlkSize*nBlkSize */
+    int nBlkX, int nBlkY, int nBlkSize,
+    int stepX, int stepY, int overlapX, int overlapY,
+    __global const short* __restrict winBase, int win_stride, /* nBlkSize*nBlkSize */
+    int width, int height,
+    __global       PX* __restrict dst, int dst_pitch)
+{
+    int x = (int)get_global_id(0);
+    int y = (int)get_global_id(1);
+    if (x >= width || y >= height)
+        return;
+
+    int W_B = nBlkX * stepX + overlapX;
+    int H_B = nBlkY * stepY + overlapY;
+    if (x >= W_B || y >= H_B) {
+        dst[x + y * dst_pitch] = src[x + y * src_pitch];
+        return;
+    }
+
+    int tmp = 0;
+    int byc = y / stepY;
+    for (int dby = 0; dby <= 2; dby++) {
+        int by = byc - dby;
+        if (by < 0 || by >= nBlkY)
+            continue;
+        if (by * stepY > y || y >= by * stepY + nBlkSize)
+            continue;
+        int v = y - by * stepY;
+        int wby = 3 * ((by + nBlkY - 3) / (nBlkY - 2));
+        int bxc = x / stepX;
+        for (int dbx = 0; dbx <= 2; dbx++) {
+            int bx = bxc - dbx;
+            if (bx < 0 || bx >= nBlkX)
+                continue;
+            if (bx * stepX > x || x >= bx * stepX + nBlkSize)
+                continue;
+            int u = x - bx * stepX;
+            int wbx = (bx + nBlkX - 3) / (nBlkX - 2);
+            int blk = bx + by * nBlkX;
+            int pv = (int)patch[blk * patch_stride + v * nBlkSize + u];
+            int win = (int)winBase[(wby + wbx) * win_stride + v * nBlkSize + u];
+            if (PX_MAX > 255)
+                tmp += pv * win;
+            else
+                tmp += (pv * win + 256) >> 6;
+        }
+    }
+
+    int a = (PX_MAX > 255) ? (tmp >> 11) : (tmp >> 5);
+    if (a > PX_MAX) a = PX_MAX;
+    if (a < 0) a = 0;
+    dst[x + y * dst_pitch] = (PX)a;
+}

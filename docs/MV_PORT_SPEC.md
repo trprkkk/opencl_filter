@@ -154,6 +154,15 @@ per-plane KTGMC kernels.
   transliterates the fused CUDA kernel verbatim.
   Note: upstream `kl_write_default_mv` sets `.x` twice (a typo for `.sad`); we
   implement the intended default.
+  The degrain/compensate OVERLAP pixel-combiner core — `kt_degrain_patch`
+  (Degrain1to6_C weighted denoise of a block) + `kt_overlap_out` (feathered
+  Overlaps_C window accumulation + Short2Bytes, per output pixel over its <= 2x2
+  covering blocks, with edge source-copy) — is ALG-VERIFIED (`run_mv_degrain.py`,
+  300 cases): its per-pixel summation matches a faithful MV.cpp-staging CPU
+  mirror (`sim/ktgmc_degrain_ref.cpp`) bit-for-bit for 8/16-bit, overlap=0 and
+  overlap=nBlkSize/2.  These are the only degrain/compensate kernels that are
+  verifiable in-sandbox; they take the per-block reference-plane element offsets
+  (refBaseB/F) as resolved inputs — that resolution is the host/rig seam (§6.1).
 - **RIG-VERIFY** (faithful source ports, device run pending): the frame padding
   / mirror-copy kernels (`kt_copy_pad`, `kt_pad_frame_h/v`), `kt_init_scene_change`,
   `kt_most_freq_mv`, the block-search pure helpers (`kt_clip_mv`/`kt_check_mv`/
@@ -216,15 +225,32 @@ host pattern/grid, plus the window generation (`OverlapWindows`, 9 feathered
 windows of `nBlkSize*nBlkSize`), the block-geometry model of §6.1, and the
 per-plane `pDst` tmp layout — i.e. the full on-rig host assembly, not a
 self-contained kernel. We therefore record these as rig-bound rather than ship a
-speculative scalar re-derivation.
+speculative scalar re-derivation. The arithmetic they need is now *not* missing:
+the ALG-VERIFIED combiner core `kt_degrain_patch` + `kt_overlap_out` (§6, above)
+is the order-equivalent, verified way to produce identical output once the host
+supplies the per-block ref-plane base offsets and windows (see §6.2).
 - **Separate KTGMC temporal-filter path** (Kernel.cu, not MV): `kl_init_sad`,
   `kl_calculate_sad`, `kl_copy_boarder1(_v)`, `kl_logic1/2/3`, `kl_box3_v`,
   `kl_box5_v_and_border`, `kl_binomial_temporal_soften_1/2` — several use packed
   `vpixel_t`/`__vabsdiff4` or float `atomicAdd` reductions whose output ordering
   is not bit-deterministic, so they are ported scalar / as flags only.
 
+### 6.2 The one seam between verified kernels and the rig
+
+The degrain/compensate combiner math is verified; the *only* thing left to wire
+is turning the MV.cpp `KMPlane`/`GetPointer` reference semantics into the flat
+per-block element offsets (`refBaseB/refBaseF`, indexed `k*nBlk+blk`) that
+`kt_degrain_patch` consumes, plus the host-side 9-window generation. Concretely:
+`KMPlane::SetTarget` stacks `nPel*nPel` sub-pel planes `nPitch*nExtendedHeight`
+apart; `GetPointer(nX,nY)` folds the low `log2(nPel)` bits of `nX,nY` into the
+plane index, adds `nHPadPel/nVPadPel`, and the block base is
+`block.x*nPel + mv[k][blk].x` (block.x = `bx*StepX`, StepX = `nBlkSize-overlap`).
+That offset maps directly onto the verified `kt_ref_block_offset` helper. A
+concise step-by-step recipe for the follow-up agent / rig lives in
+`docs/CODEX_HANDOFF.md`.
+
 So the isolated, per-output deterministic MV kernels are complete
-(20 in `ktgmc_motion.cl` + 25 in `ktgmc_simple.cl`), and `kt_calc_all_sad`
+(22 in `ktgmc_motion.cl` + 25 in `ktgmc_simple.cl`), and `kt_calc_all_sad`
 extends the set into the first block-level (MV + super-frame) kernel.
 Finishing KTGMC from here means assembling the `SearchBatchData` + super-frame
 layout on a real rig (see `docs/HOST_CONTRACT.md`) and then porting/validating

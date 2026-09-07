@@ -25,6 +25,7 @@ test: ref lint
 	python3 python/run_mv_io.py
 	python3 python/run_mv_rb2b.py
 	python3 python/run_mv_rb2b_pad.py
+	python3 python/run_mv_degrain.py
 
 clean:
 	rm -rf build

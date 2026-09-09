@@ -19,7 +19,7 @@ buffers and dispatches them, with a scalar CPU reference used for validation.
 |---|---|---|
 | **KTGMC** | QTGMC-style deinterlacer (motion compensated) | In progress — **Milestone 1 done** (see below) |
 | KNNEDI3 | NNEDI3 neural-net upscaler | not started (next candidate) |
-| KFM | filter family (KDeband, Deblock, CombingAnalyze, …) | **KDeband/KEdgeLevel/KTemporalNR + MergeStatic/KAnalyzeStatic/KNoiseClip + KDeblock core done** (`src/opencl/kfm/kernels/`) |
+| KFM | filter family (KDeband, Deblock, CombingAnalyze, …) | **KDeband/KEdgeLevel/KTemporalNR + MergeStatic/KAnalyzeStatic/KNoiseClip + KDeblock (core/qp-table/show) done** (`src/opencl/kfm/kernels/`) |
 | AvsCUDA / GRunT / masktools | CUDA-aware dispatch + helpers | out of scope unless requested |
 
 A faithful KTGMC port is large: `KTGMC/Kernel.cu` (~3,560 lines) + `MVKernel.cu`
@@ -152,17 +152,21 @@ Makefile                       # make test  (no OpenCL required)
   nmin, range)` (128 == equal). Driven by one per-plane kernel, so it is
   kernel-complete (only AviSynth host glue remains). **ALG-VERIFIED** via
   `python/run_kfm_noiseclip.py` (300 cases, integer-exact, nmin/range sweeps).
-- `kfm_deblock.cl`: **KFM KDeblock core** — `kf_deblock`, faithful to the CUDA
-  device kernel `kl_deblock` (KFM/Deblock.cu, MIT): the fixed float32 8×8
-  DCT → hard-threshold (AC coeffs only, DC untouched) → IDCT deblocking stage
-  that runs `count = 1<<quality` shifted passes per block and accumulates into
-  a 16-bit block-parity plane. Transcribed from the *device* transform path
-  (the upstream CPU fallback's `thresh<=0` identity shortcut is not used).
-  **ALG-VERIFIED** via `python/run_kfm_deblock.py` (300 cases) against
-  `sim/kfm_deblock_ref.cpp` and an independent float32-exact Python golden —
-  bit-exact. The mirror-pad / QP-table / Bayer-merge host steps are separate
-  (`// RIG-VERIFY`); documented in `docs/KFM_PORT_SPEC.md`.
-  More in `docs/KFM_PORT_SPEC.md`.
+- `kfm_deblock.cl`: **KFM KDeblock** — `kf_deblock` (the CUDA `kl_deblock`
+  device kernel, KFM/Deblock.cu, MIT): the fixed float32 8×8 DCT →
+  hard-threshold (AC coeffs only, DC untouched) → IDCT deblocking stage that
+  runs `count = 1<<quality` shifted passes per block and accumulates into a
+  16-bit block-parity plane (transcribed from the *device* transform path; the
+  upstream CPU fallback's `thresh<=0` identity shortcut is not used). Plus the
+  QP-table builder `kf_make_qp_table` (`kl_make_qp_table`, macroblock-QP → block
+  QP with optional DC blend + `norm_qscale` 0-3) and the `show==2` visualiser
+  `kf_deblock_show` (`kl_deblock_show`, paints enabled/disabled blocks 230/16).
+  **ALG-VERIFIED** via `python/run_kfm_deblock.py` (300 cases, core, vs
+  `sim/kfm_deblock_ref.cpp` + float32-exact golden) and
+  `python/run_kfm_deblock_qp.py` (make_qp_table + deblock_show, 200+200 cases,
+  vs `sim/kfm_deblock_qp_ref.cpp`) — bit-exact. The mirror-pad and Bayer
+  `kl_merge_deblock` accumulator-layout host steps remain `// RIG-VERIFY`;
+  documented in `docs/KFM_PORT_SPEC.md`.
 
 ## How the port is validated (no GPU/OpenCL needed)
 

@@ -253,3 +253,115 @@ kernel void kf_deblock(
         for (int x = 0; x < 16; ++x)
             out[(offx + x) + (offy + y) * out_pitch] = (OUTP)local_out[y][x];
 }
+
+/* ---------------------------------------------------------------------------
+ * kf_norm_qscale — normalize a QP value by the codec's QP scale type
+ * (norm_qscale in Deblock.cu, __host__ __device__):
+ *   type 0 (FF_QSCALE_TYPE_MPEG1): qscale << 2
+ *   type 1 (FF_QSCALE_TYPE_MPEG2): qscale << 1
+ *   type 2 (FF_QSCALE_TYPE_H264) : qscale
+ *   type 3 (FF_QSCALE_TYPE_VP56) : 63 - qscale + 2   (= 65 - qscale)
+ * =========================================================================*/
+static int kf_norm_qscale(int qscale, int type)
+{
+    switch (type) {
+    case 0: return qscale << 2;
+    case 1: return qscale << 1;
+    case 2: return qscale;
+    case 3: return (63 - qscale + 2);
+    }
+    return qscale;
+}
+
+/* ---------------------------------------------------------------------------
+ * kf_make_qp_table — build the per-8px-block QP table that kf_deblock consumes
+ * (kl_make_qp_table twin; cpu_make_qp_table is the authoritative CPU twin).
+ *
+ * The source QP plane(s) are macroblock (16px) grids of size
+ * (in_width x in_height); each output block (x,y) of the (out_width x
+ * out_height) table samples the source macroblock at
+ * (min(x>>qp_shift_x, in_width-1), min(y>>qp_shift_y, in_height-1)).  When two
+ * QP sources (B and non-B / two QP clips) are present they are element-max'd;
+ * a per-macroblock DC luma level (dc_table) blends the two "block distortion"
+ * (b) and "non-block distortion" (nonb) components:
+ *   b     = norm_qscale(in_qp,  qp_scale)
+ *   nonb  = norm_qscale(nonb_qp, qp_scale)
+ *   ratio = min(1.0f, dc * dc_coeff)
+ *   qp    = max(1, (int)(b*ratio + nonb*(1-ratio) + 0.5f))
+ * where dc_coeff = b_ratio/255.0f (host-supplied).  When no source QP table is
+ * present at all the table is constant `qp_scale` (= the host `force_qp`).
+ *
+ * The presence booleans carry what the CUDA expresses as NULL pointers
+ * (dc_tableN / in_table1 optional).  Grid: 2D (out_width,out_height).
+ * // ALG-VERIFIED via python/run_kfm_deblock_qp.py (see KFM_PORT_SPEC.md).
+ * -------------------------------------------------------------------------*/
+kernel void kf_make_qp_table(
+    int in_width, int in_height,
+    __global const uchar* __restrict in_table0,
+    __global const uchar* __restrict nonb_table0,
+    int has_table1,
+    __global const uchar* __restrict in_table1,
+    __global const uchar* __restrict nonb_table1,
+    int in_pitch, int qp_scale, float dc_coeff,
+    int has_dc0,
+    __global const uchar* __restrict dc_table0,
+    int has_dc1,
+    __global const uchar* __restrict dc_table1,
+    int dc_pitch,
+    int qp_shift_x, int qp_shift_y,
+    int out_width, int out_height,
+    __global OUTP* __restrict out_table, int out_pitch)
+{
+    int x = (int)get_global_id(0);
+    int y = (int)get_global_id(1);
+    if (x >= out_width || y >= out_height) return;
+
+    int qp;
+    if (in_table0) {
+        int qp_x = min(x >> qp_shift_x, in_width - 1);
+        int qp_y = min(y >> qp_shift_y, in_height - 1);
+        int in_qp = (int)in_table0[qp_x + qp_y * in_pitch];
+        int nonb_qp = (int)nonb_table0[qp_x + qp_y * in_pitch];
+        int dc = has_dc0 ? (int)dc_table0[qp_x + qp_y * dc_pitch] : 255;
+        if (has_table1) {
+            in_qp = max(in_qp, (int)in_table1[qp_x + qp_y * in_pitch]);
+            nonb_qp = max(nonb_qp, (int)nonb_table1[qp_x + qp_y * in_pitch]);
+            dc = max(dc, has_dc1 ? (int)dc_table1[qp_x + qp_y * dc_pitch] : 255);
+        }
+        int b = kf_norm_qscale(in_qp, qp_scale);
+        int nonb = kf_norm_qscale(nonb_qp, qp_scale);
+        float b_ratio = min(1.0f, (float)dc * dc_coeff);
+        qp = max(1, (int)(b * b_ratio + nonb * (1.0f - b_ratio) + 0.5f));
+    } else {
+        qp = qp_scale;
+    }
+    out_table[x + y * out_pitch] = (OUTP)qp;
+}
+
+/* ---------------------------------------------------------------------------
+ * kf_deblock_show — KDeblock `show == 2` visualisation (kl_deblock_show twin;
+ * cpu_deblock_show is the authoritative CPU twin).  Paints each 8px QP block
+ * either `230` (deblocking enabled for it) or `16` (not), into the visible
+ * plane.  Blocks tile the plane without overlap at an origin offset of -4:
+ * block (bx,by) covers x in [bx*8-4, bx*8+3], y in [by*8-4, by*8+3], clipped to
+ * the plane.  `enabled` = qp_apply_thresh(qp) >= (qp>>1).
+ * Grid: 2D (width,height) over visible pixels (equivalent, deterministic).
+ * // ALG-VERIFIED via python/run_kfm_deblock_qp.py.
+ * -------------------------------------------------------------------------*/
+kernel void kf_deblock_show(
+    __global PX* __restrict dst, int dst_pitch,
+    int width, int height,
+    int bw, int bh,
+    __global const OUTP* __restrict qp_table, int qp_pitch,
+    float thresh_a, float thresh_b)
+{
+    int x = (int)get_global_id(0);
+    int y = (int)get_global_id(1);
+    if (x >= width || y >= height) return;
+
+    int bx = (x + 4) >> 3;   /* pixel x belongs to block bx (origin bx*8-4) */
+    int by = (y + 4) >> 3;
+    OUTP qp = qp_table[bx + by * qp_pitch];
+    int is_enabled = (kf_qp_thresh((int)qp, thresh_a, thresh_b) >= (int)(qp >> 1));
+    dst[x + y * dst_pitch] = is_enabled ? (PX)230 : (PX)16;
+}

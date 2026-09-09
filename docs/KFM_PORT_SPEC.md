@@ -20,7 +20,7 @@ KTGMC kernels were. KDeband was chosen first (see docs/PORT_PLAN.md §5).
 | `KDeband.cu` | `KTemporalNR`, `KDeband`, `KEdgeLevel` | **KDeband core done**; **KEdgeLevel done**; **KTemporalNR done** |
 | `KFMKernel.cu` | `KPatchCombe`, `KFMSwitch`, `KFMPad`, `KFMDecimate`, `AssumeDevice` | not started |
 | `CombingAnalyze.cu` | `KFMSuper`, `KCleanSuper`, `KPreCycleAnalyze(_Show)`, `KFMSuperShow`, `KTelecine(_Super)`, `KSwitchFlag`, `KContainsCombe`, `KCombeMask`, `KRemoveCombe` | not started |
-| `Deblock.cu` | `KDeblock`, `QPClip`, `ShowQP`, `FrameType` | **KDeblock core (kl_deblock) done** (see below; QPClip is a no-op pass-through) |
+| `Deblock.cu` | `KDeblock`, `QPClip`, `ShowQP`, `FrameType` | **KDeblock core + QP-table/show done** (`kf_deblock`, `kf_make_qp_table`, `kf_deblock_show`; see below; QPClip is a no-op pass-through) |
 | `DecombeUCF.cu` | `KCFieldDiff`, `KCFrameDiffDup`, `KNoiseClip`, `KAnalyzeNoise`, `KDecombUCF*` | **KNoiseClip done** (see below) |
 | `MergeStatic.cu` | `KTemporalDiff`, `KAnalyzeStatic`, `KMergeStatic` | **all 6 pipeline kernels done** (KDeband.cu-style core; KAnalyzeStatic host glue in `kfm_filterbase.cl`/`kfm_mergestatic.cl`) |
 
@@ -249,13 +249,34 @@ Fidelity notes (honest):
   cells are unused), which is what the scalar 8-stride port does. Output
   identical.
 - Host seam (RIG-VERIFY): KDeblock::DeblockPlane first mirror-pads the plane
-  (8 px/side) into `src`, builds the per-block QP table (`kl_make_qp_table`) and
-  later merges the accumulator with a Bayer dither (`kl_merge_deblock`,
-  `g_ldither`) and a `>>> shift` scale. Those pad / qp-table / merge steps are
-  separate kernels/host glue not yet ported; this file is the core DCT stage,
-  verified on a self-consistent padded-src config.
+  (8 px/side) into `src` and later merges the accumulator with a Bayer dither
+  (`kl_merge_deblock`, `g_ldither`) and a `>>> shift` scale. The pad and merge
+  steps are host glue / a separate accumulator-layout kernel not yet ported;
+  the .cl is the core DCT stage plus the QP-table/show helpers, verified on a
+  self-consistent padded-src config.
 - `QPClip` (same source file) is a no-op host filter that only copies frame
   properties to a 2×2 Y8 frame — no kernel, so nothing to port/verify there.
+
+### `KDeblock` QP table + show (`kf_make_qp_table` / `kf_deblock_show`,
+src/opencl/kfm/kernels/kfm_deblock.cl)
+
+- `kf_make_qp_table` (twin of `kl_make_qp_table`/`cpu_make_qp_table`, part of
+  the `QPForDeblock` helper that feeds KDeblock): downsamples macroblock (16px)
+  QP plane(s) into the per-8px-block uint16 QP table `kf_deblock` consumes.
+  Source macroblock at `(min(x>>qp_shift_x, w-1), min(y>>qp_shift_y, h-1))`;
+  element-max of an optional second (non-B) QP source; a per-macroblock DC luma
+  level blends the normalized block/non-block distortions `b`/`nonb`
+  (`norm_qscale` for QP scale type 0/1/2/3 = MPEG1/2/H264/VP56) via
+  `ratio = min(1, dc*dc_coeff)`, `qp = max(1,(int)(b*ratio+nonb*(1-ratio)+.5))`.
+  Constant (`force_qp`) mode when no source QP plane exists. Null-vs-present
+  CUDA pointers are carried as presence booleans. Float blend emulated float32.
+- `kf_deblock_show` (twin of `kl_deblock_show`/`cpu_deblock_show`, KDeblock
+  `show==2`): paints each 8px QP block `230` if deblocking is enabled for it
+  (`qp_apply_thresh(qp) >= qp>>1`) else `16`, into the visible plane; blocks
+  tile without overlap from an origin offset of −4 (deterministic).
+  Both `// ALG-VERIFIED` via `python/run_kfm_deblock_qp.py`
+  (200+200 cases, integer-exact, float32-emulated blend) against
+  `sim/kfm_deblock_qp_ref.cpp`.
 
 ## Next candidates (verifiable in this sandbox)
 
@@ -263,8 +284,9 @@ Fidelity notes (honest):
 - `KTemporalDiff` / `KMergeStatic` host glue (they are now kernel-complete; the
   AviSynth frame-fetch / NewVideoFrame / CopyFrame seam could be recorded as the
   next concrete on-rig step).
-- Deblock remaining: `kl_make_qp_table`, `kl_merge_deblock` (+`g_ldither`),
-  `kl_deblock_show`, `kl_scale_qp`, and the KDeblock pad/merge host glue.
+- Deblock remaining: `kl_merge_deblock` (+`g_ldither` Bayer merge, ties to the
+  unported accumulator layout), `kl_scale_qp` (ShowQP), the Deblock.cu pad /
+  DC-mask `kl_max_vh/v/h`, and the KDeblock pad/merge host glue.
 - Remaining KFM families: CombingAnalyze.cu (KFMSuper/…; super-frame motion
   state) and the rest of DecombeUCF.cu (KDecombUCF* — heavy multi-clip host
   pipelines). KFMKernel.cu and Deblock QPClip/ShowQP are pure host/props filters

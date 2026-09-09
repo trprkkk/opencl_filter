@@ -180,7 +180,10 @@ To get a working deinterlacer you must port the mvtools-equivalent layers:
   kernel-complete. The **KDeblock core** `kf_deblock` (Deblock.cu `kl_deblock`,
   in `kfm_deblock.cl`) is ALG-VERIFIED too: the fixed float32 8×8 DCT/
   hard-threshold/IDCT deblocking stage, bit-exact vs an independent float32
-  Python golden (its pad / QP-table / merge host steps remain RIG-VERIFY).
+  Python golden. Its QP-table builder `kf_make_qp_table` and `show==2`
+  visualiser `kf_deblock_show` are ALG-VERIFIED as well (integer-exact;
+  `python/run_kfm_deblock_qp.py`). Only the pad and Bayer `kl_merge_deblock`
+  accumulator-layout host steps remain RIG-VERIFY.
   Full KFM map + next candidates (CombingAnalyze / remaining DecombeUCF /
   Deblock helpers) are in `docs/KFM_PORT_SPEC.md`.
 

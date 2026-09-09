@@ -174,9 +174,11 @@ To get a working deinterlacer you must port the mvtools-equivalent layers:
   four KFMFilterBase coefficient kernels (`kf_calc_combe`, `kf_merge_uvcoefs`,
   `kf_extend_coef2`, `kf_apply_uvcoefs_420`, in `kfm_filterbase.cl`) plus
   `kf_min_frames`/`kf_and_coefs` (in `kfm_mergestatic.cl`); only the VPAD-pad
-  host assembly of the KAnalyzeStatic pipeline is left (`// RIG-VERIFY`). Full
-  KFM map + next candidates (Deblock / CombingAnalyze / DecombeUCF / KFMKernel)
-  are in `docs/KFM_PORT_SPEC.md`.
+  host assembly of the KAnalyzeStatic pipeline is left (`// RIG-VERIFY`).
+  **KNoiseClip** (`kf_noise_clip`, from DecombeUCF.cu, in `kfm_noiseclip.cl`)
+  is also ALG-VERIFIED — a self-contained 8-bit filter that is
+  kernel-complete. Full KFM map + next candidates (Deblock / CombingAnalyze /
+  DecombeUCF / KFMKernel) are in `docs/KFM_PORT_SPEC.md`.
 
 ## 6. AviSynth integration (device glue)
 

@@ -21,7 +21,7 @@ KTGMC kernels were. KDeband was chosen first (see docs/PORT_PLAN.md §5).
 | `KFMKernel.cu` | `KPatchCombe`, `KFMSwitch`, `KFMPad`, `KFMDecimate`, `AssumeDevice` | not started |
 | `CombingAnalyze.cu` | `KFMSuper`, `KCleanSuper`, `KPreCycleAnalyze(_Show)`, `KFMSuperShow`, `KTelecine(_Super)`, `KSwitchFlag`, `KContainsCombe`, `KCombeMask`, `KRemoveCombe` | not started |
 | `Deblock.cu` | `KDeblock`, `QPClip`, `ShowQP`, `FrameType` | not started |
-| `DecombeUCF.cu` | `KCFieldDiff`, `KCFrameDiffDup`, `KNoiseClip`, `KAnalyzeNoise`, `KDecombUCF*` | not started |
+| `DecombeUCF.cu` | `KCFieldDiff`, `KCFrameDiffDup`, `KNoiseClip`, `KAnalyzeNoise`, `KDecombUCF*` | **KNoiseClip done** (see below) |
 | `MergeStatic.cu` | `KTemporalDiff`, `KAnalyzeStatic`, `KMergeStatic` | **all 6 pipeline kernels done** (KDeband.cu-style core; KAnalyzeStatic host glue in `kfm_filterbase.cl`/`kfm_mergestatic.cl`) |
 
 ## Verified
@@ -207,6 +207,22 @@ so the CUDA 4-wide vectorisation is equivalent to a scalar port.
 These, together with `kf_min_frames` and `kf_and_coefs` (in kfm_mergestatic.cl),
 make KAnalyzeStatic's kernel set complete (see the MergeStatic section for the
 host-assembly seam).
+
+### `KNoiseClip` (kf_noise_clip, src/opencl/kfm/kernels/kfm_noiseclip.cl)
+
+A self-contained **8-bit-only** AVS filter from DecombeUCF.cu
+(`KNoiseClip(clip, noise, nmin_y, range_y, nmin_uv, range_uv)`, a src-vs-noise
+difference/activity map used by the KDecombUCF family). It is driven per plane
+by a single kernel (`cpu_noise_clip` / `kl_noise_clip` — exact CPU twin), so it
+is kernel-complete (only AviSynth host glue remains). Per pixel (integer-exact):
+`out = dev_limitter((src - noise + 256) >> 1, nmin, range)`, where
+`dev_limitter` maps `s == 128` (equal) to 128, the band
+`(127-range)<s<(128-nmin)` to 0 / otherwise 56 below 128, the band
+`(128+nmin)<s<(129+range)` to 255 / otherwise 199 above. `// ALG-VERIFIED` via
+`python/run_kfm_noiseclip.py` (300 cases: CPU mirror `sim/kfm_noiseclip_ref.cpp`
+vs an independent Python golden over nmin/range sweeps). Y uses `nmin_y`/
+`range_y`; U,V use `nmin_uv`/`range_uv`. (Host requires plane width %4==0 — the
+scalar port is exact for any width.)
 
 ## Next candidates (verifiable in this sandbox)
 

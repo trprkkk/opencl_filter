@@ -19,7 +19,7 @@ buffers and dispatches them, with a scalar CPU reference used for validation.
 |---|---|---|
 | **KTGMC** | QTGMC-style deinterlacer (motion compensated) | In progress — **Milestone 1 done** (see below) |
 | KNNEDI3 | NNEDI3 neural-net upscaler | not started (next candidate) |
-| KFM | filter family (KDeband, Deblock, CombingAnalyze, …) | **KDeband/KEdgeLevel/KTemporalNR + MergeStatic/KAnalyzeStatic kernels done** (`src/opencl/kfm/kernels/`) |
+| KFM | filter family (KDeband, Deblock, CombingAnalyze, …) | **KDeband/KEdgeLevel/KTemporalNR + MergeStatic/KAnalyzeStatic/KNoiseClip kernels done** (`src/opencl/kfm/kernels/`) |
 | AvsCUDA / GRunT / masktools | CUDA-aware dispatch + helpers | out of scope unless requested |
 
 A faithful KTGMC port is large: `KTGMC/Kernel.cu` (~3,560 lines) + `MVKernel.cu`
@@ -75,7 +75,7 @@ docs/BLOCKSEARCH_MODEL.md      # KTGMC block-search host model (SearchBatch, sup
 docs/CODEX_HANDOFF.md          # step-by-step recipe for the rig-bound MV remainder
 docs/KFM_PORT_SPEC.md          # KFM filter-family map + verified/next status
 src/opencl/ktgmc/kernels/      # OpenCL kernel sources: KTGMC motion/simple
-src/opencl/kfm/kernels/        # OpenCL kernel sources: KFM (deband/edgelevel/temporalnr/mergestatic/filterbase .cl)
+src/opencl/kfm/kernels/        # OpenCL kernel sources: KFM (deband/edgelevel/temporalnr/mergestatic/filterbase/noiseclip .cl)
 sim/ktgmc_cpu_ref.cpp          # scalar CPU mirror of the kernels (validates logic)
 python/run_validation.py       # independent Python golden + cross-check harness
 Makefile                       # make test  (no OpenCL required)
@@ -132,12 +132,10 @@ Makefile                       # make test  (no OpenCL required)
   temporal-min sub-step), `kf_and_coefs` (KAnalyzeStatic combing∧static
   sub-step, float32), `kf_merge_static` (KMergeStatic core,
   `(coef*v30+(128-coef)*v60+64)>>7`). KTemporalDiff and KMergeStatic are
-  kernel-complete (only AviSynth host glue remains); the KAnalyzeStatic
-  *pipeline* also needs CombingAnalyze's coefficient helpers (CompareFields/
-  MergeUVCoefs/ExtendCoefs/ApplyUVCoefs), so only its two kernels are ported
-  here. **ALG-VERIFIED** via `python/run_kfm_mergestatic.py` (580 cases: CPU
-  mirror `sim/kfm_mergestatic_ref.cpp` vs an independent float32-exact Python
-  golden).
+  kernel-complete (only AviSynth host glue remains); KAnalyzeStatic's remaining
+  coefficient kernels are in kfm_filterbase.cl. **ALG-VERIFIED** via
+  `python/run_kfm_mergestatic.py` (580 cases: CPU mirror
+  `sim/kfm_mergestatic_ref.cpp` vs an independent float32-exact Python golden).
 - `kfm_filterbase.cl`: **KFM KFMFilterBase coefficient kernels** — `kf_calc_combe`
   (CompareFields combing, `|a+4c+e-3(b+d)|>>2` clamped [0,255]; interior
   ALG-VERIFIED, border needs a VPAD-padded plane on the rig),
@@ -146,8 +144,15 @@ Makefile                       # make test  (no OpenCL required)
   extreme rows), `kf_apply_uvcoefs_420` (YV12 Y→UV). These plus
   `kf_min_frames`/`kf_and_coefs` complete KAnalyzeStatic's kernel set (only the
   VPAD-pad host assembly remains, `// RIG-VERIFY`). **ALG-VERIFIED** via
-  `python/run_kfm_filterbase.py` (680 cases, integer-exact). More in
-  `docs/KFM_PORT_SPEC.md`.
+  `python/run_kfm_filterbase.py` (680 cases, integer-exact).
+- `kfm_noiseclip.cl`: **KFM KNoiseClip** — `kf_noise_clip`, faithful to
+  `cpu_noise_clip`/`dev_limitter` (KFM/DecombeUCF.cu, MIT). Self-contained
+  **8-bit-only** filter that maps each src pixel against a `noise` pixel into
+  band markers `{0,56,128,199,255}`: `out = dev_limitter((src-noise+256)>>1,
+  nmin, range)` (128 == equal). Driven by one per-plane kernel, so it is
+  kernel-complete (only AviSynth host glue remains). **ALG-VERIFIED** via
+  `python/run_kfm_noiseclip.py` (300 cases, integer-exact, nmin/range sweeps).
+  More in `docs/KFM_PORT_SPEC.md`.
 
 ## How the port is validated (no GPU/OpenCL needed)
 

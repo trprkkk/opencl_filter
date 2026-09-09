@@ -22,7 +22,7 @@ KTGMC kernels were. KDeband was chosen first (see docs/PORT_PLAN.md §5).
 | `CombingAnalyze.cu` | `KFMSuper`, `KCleanSuper`, `KPreCycleAnalyze(_Show)`, `KFMSuperShow`, `KTelecine(_Super)`, `KSwitchFlag`, `KContainsCombe`, `KCombeMask`, `KRemoveCombe` | not started |
 | `Deblock.cu` | `KDeblock`, `QPClip`, `ShowQP`, `FrameType` | not started |
 | `DecombeUCF.cu` | `KCFieldDiff`, `KCFrameDiffDup`, `KNoiseClip`, `KAnalyzeNoise`, `KDecombUCF*` | not started |
-| `MergeStatic.cu` | `KTemporalDiff`, `KAnalyzeStatic`, `KMergeStatic` | not started |
+| `MergeStatic.cu` | `KTemporalDiff`, `KAnalyzeStatic`, `KMergeStatic` | **kernels done** (see below; KAnalyzeStatic pipeline not assembled) |
 
 ## Verified
 
@@ -129,12 +129,59 @@ Two fidelity notes (host / device seams):
   `-cl-fp32-correctly-rounded-enabled` (best effort) and is a `// RIG-VERIFY`
   item (~ulp-level, not algorithmic).
 
+### `MergeStatic.cu` kernels (kf_compare_frames / kf_min_frames /
+kf_and_coefs / kf_merge_static, src/opencl/kfm/kernels/kfm_mergestatic.cl)
+
+One source file registers three AVS filters (`KTemporalDiff`, `KAnalyzeStatic`,
+`KMergeStatic`) and defines four device kernels; all four are ported and
+`// ALG-VERIFIED` via `python/run_kfm_mergestatic.py` (580 cases) against the
+CPU mirror `sim/kfm_mergestatic_ref.cpp` (cpu_compare_frames / cpu_min_frames /
+cpu_merge_static are exact twins in MergeStatic.cu; `cpu_and_coefs` is **not
+defined** upstream — KAnalyzeStatic's CPU branch is CUDA-only — so mode A is an
+independent float32 transliteration). The CUDA kernels process 4-wide
+(uchar4/ushort4) vectors over `width4=width>>2`; each channel is independent, so
+the scalar port is bit-identical when plane width is a multiple of 4 (a faithful
+host config; CUDA never writes the `width%4` trailing columns).
+
+- `kf_compare_frames` — **KTemporalDiff** core: per pixel `dst =
+  max(f0..f4)-min(f0..f4)` across the frames `[n-2..n+2]` (temporal spread; high
+  ⇒ motion). Integer. The filter is just this per Y/U/V, so it is end-to-end
+  ALG-VERIFIED (modulo host glue).
+- `kf_min_frames` — KAnalyzeStatic sub-step: `dst = min(f0,f1,f2)` of the 3
+  temporal-diff frames. Integer.
+- `kf_and_coefs` — KAnalyzeStatic combing∧static sub-step, float32 (no FMA):
+  `combe = clamp(val(dstp)*invcombe - 1, -0.5, 0.5)`;
+  `diff = clamp(val(diffp)*(-invdiff) + 1, -0.5, 0.5)`;
+  `dstp = trunc(max(combe+diff,0)*128 + 0.5)` (result coefficient ∈ [0,128],
+  feeds kf_merge_static). `invcombe=1.0f/thcombe`, `invdiff=1.0f/thdiff` are
+  host constants.
+- `kf_merge_static` — **KMergeStatic** core: per pixel `dst =
+  (coef*v30+(128-coef)*v60+64)>>7`, coef ∈ [0,128] from the static flag plane
+  (coef=128 ⇒ take the 30fps field, 0 ⇒ keep the 60fps frame); host copies the
+  60fps frame into dst first. Integer. The filter is this over Y/U/V, so it is
+  end-to-end ALG-VERIFIED (modulo host CopyFrame glue).
+
+Assembly / fidelity notes (honest): **KTemporalDiff** and **KMergeStatic** are
+self-contained per-plane filters — only host AviSynth glue (frame fetch,
+NewVideoFrame, CopyFrame) is needed to realise them on the rig. **KAnalyzeStatic**
+as a whole is a pipeline that additionally calls `CompareFields`,
+`MergeUVCoefs`, `ExtendCoefs`, `ApplyUVCoefs` (from the CombingAnalyze /
+KFMFilterBase machinery, a later milestone) and requires YV12 subsampling; only
+its two kernels that live in MergeStatic.cu (`kf_min_frames`, `kf_and_coefs`)
+are ported+verified here, so the KAnalyzeStatic pipeline is NOT assembled in
+this sandbox. `kf_and_coefs` float contraction is a `// RIG-VERIFY` item (CUDA
+may fuse `a*b+c` into fma; <1 ulp difference).
+
 ## Next candidates (verifiable in this sandbox)
 
 - `kl_copy` / `kl_fill` helpers (already covered generically by KTGMC `kt_copy`).
+- `KTemporalDiff` / `KMergeStatic` host glue (they are now kernel-complete; the
+  AviSynth frame-fetch / NewVideoFrame / CopyFrame seam could be recorded as the
+  next concrete on-rig step).
 - Remaining KFM families are in Deblock.cu / CombingAnalyze.cu / DecombeUCF.cu /
-  MergeStatic.cu / KFMKernel.cu (registered in the table above; most need more
-  host glue / motion state, so they are deferred as heavier milestones).
+  KFMKernel.cu (registered in the table above; most need more host glue /
+  motion state / the CombingAnalyze coefficient machinery, so they are deferred
+  as heavier milestones).
 
 ## Notes / licence
 

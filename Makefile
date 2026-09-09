@@ -29,6 +29,7 @@ test: ref lint
 	python3 python/run_kfm_deband.py
 	python3 python/run_kfm_edgelevel.py
 	python3 python/run_kfm_temporalnr.py
+	python3 python/run_kfm_mergestatic.py
 
 clean:
 	rm -rf build

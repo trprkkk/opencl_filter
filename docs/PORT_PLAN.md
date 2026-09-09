@@ -161,13 +161,20 @@ To get a working deinterlacer you must port the mvtools-equivalent layers:
 
 - **KNNEDI3**: self-contained neural-net 2× scaler; medium-large.
 - **KFM**: MIT → cleanest to reuse/redistribute. **KDeband** (the smallest
-  self-contained filter) was ported first, then **KEdgeLevel** and
-  **KTemporalNR**. KDeband's `kf_deband_reduce_banding`, KEdgeLevel's four
-  kernels (`kf_edgelevel`, `kf_edgelevel_repair`, `kf_el_to444`,
-  `kf_el_from444`) and KTemporalNR's `kf_temporal_nr` are ported and
-  ALG-VERIFIED in `src/opencl/kfm/kernels/kfm_deband.cl` / `kfm_edgelevel.cl` /
-  `kfm_temporalnr.cl`. Full KFM map + next candidates (Deblock /
-  CombingAnalyze / DecombeUCF / MergeStatic) are in `docs/KFM_PORT_SPEC.md`.
+  self-contained filter) was ported first, then **KEdgeLevel**,
+  **KTemporalNR** and the **MergeStatic.cu** kernels. KDeband's
+  `kf_deband_reduce_banding`, KEdgeLevel's four kernels (`kf_edgelevel`,
+  `kf_edgelevel_repair`, `kf_el_to444`, `kf_el_from444`), KTemporalNR's
+  `kf_temporal_nr`, and MergeStatic.cu's four (`kf_compare_frames`,
+  `kf_min_frames`, `kf_and_coefs`, `kf_merge_static`) are ALG-VERIFIED in
+  `src/opencl/kfm/kernels/kfm_deband.cl` / `kfm_edgelevel.cl` /
+  `kfm_temporalnr.cl` / `kfm_mergestatic.cl`. MergeStatic: KTemporalDiff and
+  KMergeStatic are kernel-complete (only AviSynth host glue remains); the
+  KAnalyzeStatic *pipeline* additionally needs the CombingAnalyze coefficient
+  machinery (CompareFields/MergeUVCoefs/ExtendCoefs/ApplyUVCoefs) so only its
+  two kernels are ported/verified here. Full KFM map + next candidates
+  (Deblock / CombingAnalyze / DecombeUCF / KFMKernel) are in
+  `docs/KFM_PORT_SPEC.md`.
 
 ## 6. AviSynth integration (device glue)
 

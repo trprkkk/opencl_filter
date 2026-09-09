@@ -30,6 +30,7 @@ test: ref lint
 	python3 python/run_kfm_edgelevel.py
 	python3 python/run_kfm_temporalnr.py
 	python3 python/run_kfm_mergestatic.py
+	python3 python/run_kfm_filterbase.py
 
 clean:
 	rm -rf build

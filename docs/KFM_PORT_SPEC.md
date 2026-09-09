@@ -22,7 +22,7 @@ KTGMC kernels were. KDeband was chosen first (see docs/PORT_PLAN.md §5).
 | `CombingAnalyze.cu` | `KFMSuper`, `KCleanSuper`, `KPreCycleAnalyze(_Show)`, `KFMSuperShow`, `KTelecine(_Super)`, `KSwitchFlag`, `KContainsCombe`, `KCombeMask`, `KRemoveCombe` | not started |
 | `Deblock.cu` | `KDeblock`, `QPClip`, `ShowQP`, `FrameType` | not started |
 | `DecombeUCF.cu` | `KCFieldDiff`, `KCFrameDiffDup`, `KNoiseClip`, `KAnalyzeNoise`, `KDecombUCF*` | not started |
-| `MergeStatic.cu` | `KTemporalDiff`, `KAnalyzeStatic`, `KMergeStatic` | **kernels done** (see below; KAnalyzeStatic pipeline not assembled) |
+| `MergeStatic.cu` | `KTemporalDiff`, `KAnalyzeStatic`, `KMergeStatic` | **all 6 pipeline kernels done** (KDeband.cu-style core; KAnalyzeStatic host glue in `kfm_filterbase.cl`/`kfm_mergestatic.cl`) |
 
 ## Verified
 
@@ -136,12 +136,12 @@ One source file registers three AVS filters (`KTemporalDiff`, `KAnalyzeStatic`,
 `KMergeStatic`) and defines four device kernels; all four are ported and
 `// ALG-VERIFIED` via `python/run_kfm_mergestatic.py` (580 cases) against the
 CPU mirror `sim/kfm_mergestatic_ref.cpp` (cpu_compare_frames / cpu_min_frames /
-cpu_merge_static are exact twins in MergeStatic.cu; `cpu_and_coefs` is **not
-defined** upstream — KAnalyzeStatic's CPU branch is CUDA-only — so mode A is an
-independent float32 transliteration). The CUDA kernels process 4-wide
-(uchar4/ushort4) vectors over `width4=width>>2`; each channel is independent, so
-the scalar port is bit-identical when plane width is a multiple of 4 (a faithful
-host config; CUDA never writes the `width%4` trailing columns).
+cpu_merge_static are exact twins in MergeStatic.cu; `cpu_and_coefs` is an exact
+twin in KFMFilterBase.cu — see the KFMFilterBase section below). The CUDA
+kernels process 4-wide (uchar4/ushort4) vectors over `width4=width>>2`; each
+channel is independent, so the scalar port is bit-identical when plane width is
+a multiple of 4 (a faithful host config; CUDA never writes the `width%4`
+trailing columns).
 
 - `kf_compare_frames` — **KTemporalDiff** core: per pixel `dst =
   max(f0..f4)-min(f0..f4)` across the frames `[n-2..n+2]` (temporal spread; high
@@ -164,13 +164,49 @@ host config; CUDA never writes the `width%4` trailing columns).
 Assembly / fidelity notes (honest): **KTemporalDiff** and **KMergeStatic** are
 self-contained per-plane filters — only host AviSynth glue (frame fetch,
 NewVideoFrame, CopyFrame) is needed to realise them on the rig. **KAnalyzeStatic**
-as a whole is a pipeline that additionally calls `CompareFields`,
-`MergeUVCoefs`, `ExtendCoefs`, `ApplyUVCoefs` (from the CombingAnalyze /
-KFMFilterBase machinery, a later milestone) and requires YV12 subsampling; only
-its two kernels that live in MergeStatic.cu (`kf_min_frames`, `kf_and_coefs`)
-are ported+verified here, so the KAnalyzeStatic pipeline is NOT assembled in
-this sandbox. `kf_and_coefs` float contraction is a `// RIG-VERIFY` item (CUDA
-may fuse `a*b+c` into fma; <1 ulp difference).
+is a pipeline whose full kernel set is now ported+verified: `CompareFields` →
+`kf_calc_combe`, `MergeUVCoefs` → `kf_merge_uvcoefs`, `ExtendCoefs` →
+`kf_extend_coef2`, the temporal-min → `kf_min_frames`, `AndCoefs` →
+`kf_and_coefs`, and `ApplyUVCoefs` → `kf_apply_uvcoefs_420` (the last four of
+these live in `kfm_filterbase.cl`, see below). It requires YV12 subsampling
+(logUVx=logUVy=1). What remains is the *host* assembly glue — the VPAD-mirror
+pad of frame n, the launch geometry over the padded buffer, and the sequencing
+of the two `MergeUVCoefs/ExtendCoefs` phases and the 3-frame temporal-diff read —
+which is a `// RIG-VERIFY` seam (device-bound), so the assembled KAnalyzeStatic
+filter is not run here. `kf_and_coefs` float contraction is a `// RIG-VERIFY`
+item (CUDA may fuse `a*b+c` into fma; <1 ulp difference).
+
+### `KFMFilterBase` coefficient kernels (kf_calc_combe / kf_merge_uvcoefs /
+kf_extend_coef2 / kf_apply_uvcoefs_420, src/opencl/kfm/kernels/kfm_filterbase.cl)
+
+`KFMFilterBase.cu` is the shared base class and defines the coefficient kernels
+that KAnalyzeStatic is assembled from (`cpu_*` twins exist in the same file).
+Four are ported here and `// ALG-VERIFIED` via `python/run_kfm_filterbase.py`
+(680 cases) against the CPU mirror `sim/kfm_filterbase_ref.cpp` and an
+independent Python golden. All are per-pixel/per-plane integer ops (no float),
+so the CUDA 4-wide vectorisation is equivalent to a scalar port.
+
+- `kf_calc_combe` — `CompareFields` core: combing measure at each pixel from the
+  5 vertical taps y-2..y+2, `combe = |a + 4c + e - 3(b+d)| >> 2`, clamped
+  `[0,255]` (regardless of bit depth — upstream casts the clamped int). It reads
+  rows y-2..y+2 with no border guard, so upstream feeds a vertically
+  mirror-padded frame (`VPAD=4`); interior rows 2..height-3 are ALG-VERIFIED,
+  the top/bottom rows are RIG-VERIFY on the padded plane.
+- `kf_merge_uvcoefs` — `MergeUVCoefs` core: in-place `fY = max(fY, max(fU,fV))`
+  with the UV coeff read at subsampled offset `(x>>logUVx, y>>logUVy)`.
+- `kf_extend_coef2` — `ExtendCoefs` core = the CUDA `kl_extend_coef2` device
+  kernel: `dst = max(src)` over vertical rows y-1..y+1 with y clamped to
+  `[0,height-1]`. (Upstream's CPU *fallback* branch instead runs
+  `cpu_extend_coef` over the interior + `cpu_copy_border`, which copies the
+  extreme rows straight through — differing from the device kernel at row 0 and
+  row height-1. OpenCL targets the GPU, so this port follows the device kernel;
+  the divergence is upstream's and only touches 2 rows of a band coefficient.)
+- `kf_apply_uvcoefs_420` — `ApplyUVCoefs` core (YV12): sets `fU=fV` to the
+  rounded 2×2 average of the Y coefficient plane.
+
+These, together with `kf_min_frames` and `kf_and_coefs` (in kfm_mergestatic.cl),
+make KAnalyzeStatic's kernel set complete (see the MergeStatic section for the
+host-assembly seam).
 
 ## Next candidates (verifiable in this sandbox)
 

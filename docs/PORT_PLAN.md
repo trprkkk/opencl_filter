@@ -168,13 +168,15 @@ To get a working deinterlacer you must port the mvtools-equivalent layers:
   `kf_temporal_nr`, and MergeStatic.cu's four (`kf_compare_frames`,
   `kf_min_frames`, `kf_and_coefs`, `kf_merge_static`) are ALG-VERIFIED in
   `src/opencl/kfm/kernels/kfm_deband.cl` / `kfm_edgelevel.cl` /
-  `kfm_temporalnr.cl` / `kfm_mergestatic.cl`. MergeStatic: KTemporalDiff and
-  KMergeStatic are kernel-complete (only AviSynth host glue remains); the
-  KAnalyzeStatic *pipeline* additionally needs the CombingAnalyze coefficient
-  machinery (CompareFields/MergeUVCoefs/ExtendCoefs/ApplyUVCoefs) so only its
-  two kernels are ported/verified here. Full KFM map + next candidates
-  (Deblock / CombingAnalyze / DecombeUCF / KFMKernel) are in
-  `docs/KFM_PORT_SPEC.md`.
+  `kfm_temporalnr.cl` / `kfm_mergestatic.cl` / `kfm_filterbase.cl`. MergeStatic:
+  KTemporalDiff and KMergeStatic are kernel-complete (only AviSynth host glue
+  remains), and KAnalyzeStatic's full kernel set is ported+verified too — the
+  four KFMFilterBase coefficient kernels (`kf_calc_combe`, `kf_merge_uvcoefs`,
+  `kf_extend_coef2`, `kf_apply_uvcoefs_420`, in `kfm_filterbase.cl`) plus
+  `kf_min_frames`/`kf_and_coefs` (in `kfm_mergestatic.cl`); only the VPAD-pad
+  host assembly of the KAnalyzeStatic pipeline is left (`// RIG-VERIFY`). Full
+  KFM map + next candidates (Deblock / CombingAnalyze / DecombeUCF / KFMKernel)
+  are in `docs/KFM_PORT_SPEC.md`.
 
 ## 6. AviSynth integration (device glue)
 

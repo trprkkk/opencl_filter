@@ -32,6 +32,7 @@ test: ref lint
 	python3 python/run_kfm_mergestatic.py
 	python3 python/run_kfm_filterbase.py
 	python3 python/run_kfm_noiseclip.py
+	python3 python/run_kfm_deblock.py
 
 clean:
 	rm -rf build

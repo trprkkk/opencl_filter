@@ -177,8 +177,12 @@ To get a working deinterlacer you must port the mvtools-equivalent layers:
   host assembly of the KAnalyzeStatic pipeline is left (`// RIG-VERIFY`).
   **KNoiseClip** (`kf_noise_clip`, from DecombeUCF.cu, in `kfm_noiseclip.cl`)
   is also ALG-VERIFIED — a self-contained 8-bit filter that is
-  kernel-complete. Full KFM map + next candidates (Deblock / CombingAnalyze /
-  DecombeUCF / KFMKernel) are in `docs/KFM_PORT_SPEC.md`.
+  kernel-complete. The **KDeblock core** `kf_deblock` (Deblock.cu `kl_deblock`,
+  in `kfm_deblock.cl`) is ALG-VERIFIED too: the fixed float32 8×8 DCT/
+  hard-threshold/IDCT deblocking stage, bit-exact vs an independent float32
+  Python golden (its pad / QP-table / merge host steps remain RIG-VERIFY).
+  Full KFM map + next candidates (CombingAnalyze / remaining DecombeUCF /
+  Deblock helpers) are in `docs/KFM_PORT_SPEC.md`.
 
 ## 6. AviSynth integration (device glue)
 

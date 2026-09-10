@@ -20,7 +20,7 @@ KTGMC kernels were. KDeband was chosen first (see docs/PORT_PLAN.md §5).
 | `KDeband.cu` | `KTemporalNR`, `KDeband`, `KEdgeLevel` | **KDeband core done**; **KEdgeLevel done**; **KTemporalNR done** |
 | `KFMKernel.cu` | `KPatchCombe`, `KFMSwitch`, `KFMPad`, `KFMDecimate`, `AssumeDevice` | not started |
 | `CombingAnalyze.cu` | `KFMSuper`, `KCleanSuper`, `KPreCycleAnalyze(_Show)`, `KFMSuperShow`, `KTelecine(_Super)`, `KSwitchFlag`, `KContainsCombe`, `KCombeMask`, `KRemoveCombe` | not started |
-| `Deblock.cu` | `KDeblock`, `QPClip`, `ShowQP`, `FrameType` | **KDeblock core + QP-table/show done** (`kf_deblock`, `kf_make_qp_table`, `kf_deblock_show`; see below; QPClip is a no-op pass-through) |
+| `Deblock.cu` | `KDeblock`, `QPClip`, `ShowQP`, `FrameType` | **KDeblock done** (`kf_deblock`, `kf_make_qp_table`, `kf_deblock_show` ALG-VERIFIED; `kf_merge_deblock`, `kf_max_vh/v/h`, `kf_scale_qp`, `kf_sharpen_coeff` transcribed `// RIG-VERIFY`; see below; QPClip is a no-op pass-through) |
 | `DecombeUCF.cu` | `KCFieldDiff`, `KCFrameDiffDup`, `KNoiseClip`, `KAnalyzeNoise`, `KDecombUCF*` | **KNoiseClip done** (see below) |
 | `MergeStatic.cu` | `KTemporalDiff`, `KAnalyzeStatic`, `KMergeStatic` | **all 6 pipeline kernels done** (KDeband.cu-style core; KAnalyzeStatic host glue in `kfm_filterbase.cl`/`kfm_mergestatic.cl`) |
 
@@ -249,11 +249,12 @@ Fidelity notes (honest):
   cells are unused), which is what the scalar 8-stride port does. Output
   identical.
 - Host seam (RIG-VERIFY): KDeblock::DeblockPlane first mirror-pads the plane
-  (8 px/side) into `src` and later merges the accumulator with a Bayer dither
-  (`kl_merge_deblock`, `g_ldither`) and a `>>> shift` scale. The pad and merge
-  steps are host glue / a separate accumulator-layout kernel not yet ported;
-  the .cl is the core DCT stage plus the QP-table/show helpers, verified on a
-  self-consistent padded-src config.
+  (8 px/side) into `src` (pad kernels `kl_padv`/`kl_padh` live in
+  KFMFilterBase, not ported here) and later merges the accumulator — that
+  merge is transcribed as `kf_merge_deblock` (see below) but its
+  accumulator-layout reconciliation is reasoned, not run. The core DCT stage
+  plus the QP-table/show helpers are verified on a self-consistent padded-src
+  config.
 - `QPClip` (same source file) is a no-op host filter that only copies frame
   properties to a 2×2 Y8 frame — no kernel, so nothing to port/verify there.
 
@@ -278,19 +279,68 @@ src/opencl/kfm/kernels/kfm_deblock.cl)
   (200+200 cases, integer-exact, float32-emulated blend) against
   `sim/kfm_deblock_qp_ref.cpp`.
 
+### `KDeblock` merge / DC-mask / ShowQP / sharpen LUT (`kf_merge_deblock`,
+`kf_max_vh/v/h`, `kf_scale_qp`, `kf_sharpen_coeff`,
+src/opencl/kfm/kernels/kfm_deblock.cl) — `// RIG-VERIFY` transcriptions
+
+Faithful scalar transcriptions of the remaining self-contained Deblock.cu
+device kernels. Lanes/pixels are independent in all of them, so the scalar
+form is lane-identical to the vector CUDA kernels. They are **not** covered by
+`make test` (no CPU mirror / Python golden yet) and must be checked on a real
+OpenCL device before use.
+
+- `kf_merge_deblock` (twin of `kl_merge_deblock`/`cpu_merge_deblock`): per
+  visible pixel sums the 4 parity-slice accumulator rows
+  (`tmp_ipitch_rows` = bh*8 rows each), scales by `1/(1<<shift)`
+  (`shift` = mergeShift = quality+6-deblockShift), adds the Bayer dither
+  `g_ldither[y&7][(x>>2)&1][x&3]/64` (table contents verbatim from Deblock.cu;
+  note the middle index runs over ushort4 columns), clamps with `fmin(v,maxv)`
+  (`maxv` = (1<<bits)-1) and C-truncates to `PX` — matching CUDA's
+  `VHelper::cast_to` (truncation, no lower clamp) and per-component
+  `min(float4,float)`. Grid is visible pixels; `vis_width` must be a multiple
+  of 4 (pass `width & ~3`, matching CUDA's `width>>2` lanes). The `tmp` base /
+  pitch conventions mirror the CUDA call exactly (base pre-offset by +8 ushorts
+  / +8 rows, pitch in ushort4 units). Layout reconciliation: CUDA `kl_deblock`
+  stores packed ushort2 at `blockIdx.x*4` while `kf_deblock` writes scalar
+  ushort at `bx*8` — the same bytes when the byte stride matches
+  (ushort2-packed == row-major ushort, incl. the atomicAdd-packed halves on
+  little-endian), so the merge consumes `kf_deblock`'s output directly with
+  `tmp_pitch_u4 = acc_pitch_ushort >> 2`. Reasoned, not run.
+- `kf_max_vh` / `kf_max_v` / `kf_max_h` (twins of `kl_max_vh`/`kl_max_v`/
+  `kl_max_h`; `cpu_max_v`/`cpu_max_h` are exact CPU twins, `kl_max_vh` is
+  device-only upstream): radius-`R` box-max dilation of the DC luma mask in
+  the `QPForDeblock` helper (upstream always instantiates `RADIUS=5`; radius
+  is a kernel arg here). Reads span ±radius around every pixel, so the caller
+  must pass the interior of a plane padded by ≥ radius (same edge contract as
+  the CUDA host, which passes pad+8+8*pitch with an 8 px margin).
+- `kf_scale_qp` (twin of `kl_scale_qp`/`cpu_scale_qp`, the ShowQP filter
+  kernel): per-pixel `(uchar)norm_qscale(src, scale_type)` via `kf_norm_qscale`
+  (int→uchar wraps mod 256 exactly like the CUDA assignment).
+- `kf_sharpen_coeff` (twin of `kl_sharpen_coeff`/`cpu_sharpen_coeff`): QP-block
+  → sharpen-strength LUT `q = qp>>3; dst = (q>=25) ? 255 : g_sharpen_coeff[q]`
+  (30-entry table verbatim). Feeds the SharpenFilter, not KDeblock itself.
+
 ## Next candidates (verifiable in this sandbox)
 
 - `kl_copy` / `kl_fill` helpers (already covered generically by KTGMC `kt_copy`).
 - `KTemporalDiff` / `KMergeStatic` host glue (they are now kernel-complete; the
   AviSynth frame-fetch / NewVideoFrame / CopyFrame seam could be recorded as the
   next concrete on-rig step).
-- Deblock remaining: `kl_merge_deblock` (+`g_ldither` Bayer merge, ties to the
-  unported accumulator layout), `kl_scale_qp` (ShowQP), the Deblock.cu pad /
-  DC-mask `kl_max_vh/v/h`, and the KDeblock pad/merge host glue.
+- Deblock remaining: `kl_sharpen` + `kl_show_sharpen_coeff` (both sample the
+  coeff plane through a CUDA texture object — need a sampler/image redesign +
+  the SharpenFilter host, incl. the GaussResize unsharp clip; note the device
+  `kl_sharpen` clamps `x+1` by `height-1`, an upstream quirk to preserve), the
+  KFMFilterBase pad kernels (`kl_padv`/`kl_padh`), the KDeblock pad/merge host
+  glue, and the rig proof of the merge accumulator-layout reconciliation (see
+  above). Upgrade path: `kf_max_v/h`, `kf_scale_qp`, `kf_sharpen_coeff` have
+  exact CPU twins and `kf_merge_deblock`/`kf_max_vh` are deterministic float32
+  / integer work, so all six are future ALG-VERIFY candidates under the
+  mirror+golden method.
 - Remaining KFM families: CombingAnalyze.cu (KFMSuper/…; super-frame motion
   state) and the rest of DecombeUCF.cu (KDecombUCF* — heavy multi-clip host
-  pipelines). KFMKernel.cu and Deblock QPClip/ShowQP are pure host/props filters
-  with no device kernels (FrameType is CPU-only).
+  pipelines). KFMKernel.cu and Deblock QPClip are pure host/props filters with
+  no device kernels (FrameType is CPU-only); ShowQP's kernel `kl_scale_qp` is
+  transcribed (`kf_scale_qp`, `// RIG-VERIFY`), its frame-assembly is host.
 
 ## Notes / licence
 

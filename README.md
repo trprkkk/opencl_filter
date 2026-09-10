@@ -19,7 +19,7 @@ buffers and dispatches them, with a scalar CPU reference used for validation.
 |---|---|---|
 | **KTGMC** | QTGMC-style deinterlacer (motion compensated) | In progress — **Milestone 1 done** (see below) |
 | KNNEDI3 | NNEDI3 neural-net upscaler | not started (next candidate) |
-| KFM | filter family (KDeband, Deblock, CombingAnalyze, …) | **KDeband/KEdgeLevel/KTemporalNR + MergeStatic/KAnalyzeStatic/KNoiseClip + KDeblock (core/qp-table/show) done** (`src/opencl/kfm/kernels/`) |
+| KFM | filter family (KDeband, Deblock, CombingAnalyze, …) | **KDeband/KEdgeLevel/KTemporalNR + MergeStatic/KAnalyzeStatic/KNoiseClip + KDeblock done** (core/qp-table/show ALG-VERIFIED; merge/max/scale/sharpen transcribed `// RIG-VERIFY`) (`src/opencl/kfm/kernels/`) |
 | AvsCUDA / GRunT / masktools | CUDA-aware dispatch + helpers | out of scope unless requested |
 
 A faithful KTGMC port is large: `KTGMC/Kernel.cu` (~3,560 lines) + `MVKernel.cu`
@@ -164,9 +164,13 @@ Makefile                       # make test  (no OpenCL required)
   **ALG-VERIFIED** via `python/run_kfm_deblock.py` (300 cases, core, vs
   `sim/kfm_deblock_ref.cpp` + float32-exact golden) and
   `python/run_kfm_deblock_qp.py` (make_qp_table + deblock_show, 200+200 cases,
-  vs `sim/kfm_deblock_qp_ref.cpp`) — bit-exact. The mirror-pad and Bayer
-  `kl_merge_deblock` accumulator-layout host steps remain `// RIG-VERIFY`;
-  documented in `docs/KFM_PORT_SPEC.md`.
+  vs `sim/kfm_deblock_qp_ref.cpp`) — bit-exact. The same file also carries
+  faithful `// RIG-VERIFY` transcriptions (not covered by `make test`) of the
+  Bayer accumulator merge `kf_merge_deblock` (+`g_ldither`), the DC-mask
+  dilation `kf_max_vh/v/h`, the ShowQP scaler `kf_scale_qp`, and the sharpen
+  LUT `kf_sharpen_coeff`; the mirror-pad host step and the merge
+  accumulator-layout rig proof remain open. Documented in
+  `docs/KFM_PORT_SPEC.md`.
 
 ## How the port is validated (no GPU/OpenCL needed)
 

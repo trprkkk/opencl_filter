@@ -6,9 +6,19 @@
  * threshold) applies an 8x8 DCT, a hard-threshold (requantisation) of the
  * AC coefficients, and an inverse DCT, accumulating `count = 1<<quality`
  * differently-offset 8x8 reconstructions of each block into a 16-bit plane.
- * This file ports the CUDA device kernel `kl_deblock` (the heart of the
- * filter); it reads a padded source plane + a per-block QP table and writes the
- * interleaved 16-bit accumulator that the later merge pass consumes.
+ *
+ * Contents (`// ALG-VERIFIED` = cross-checked by make test vs a CPU mirror +
+ * independent Python golden; `// RIG-VERIFY` = faithful transcription, device
+ * run pending):
+ *   kf_deblock        kl_deblock twin (core DCT stage) ..... // ALG-VERIFIED
+ *   kf_make_qp_table  kl_make_qp_table twin (QP table) ..... // ALG-VERIFIED
+ *   kf_deblock_show   kl_deblock_show twin (show==2) ....... // ALG-VERIFIED
+ *   kf_merge_deblock  kl_merge_deblock twin (Bayer merge) .. // RIG-VERIFY
+ *   kf_max_vh/v/h     kl_max_vh/v/h twins (DC-mask dilate) . // RIG-VERIFY
+ *   kf_scale_qp       kl_scale_qp twin (ShowQP) ............ // RIG-VERIFY
+ *   kf_sharpen_coeff  kl_sharpen_coeff twin (sharpen LUT) .. // RIG-VERIFY
+ * plus the kf_norm_qscale helper, the g_deblock_offset tables (g_offx/g_offy),
+ * the Bayer dither table (g_ldither) and the sharpen LUT (g_sharpen_coeff).
  *
  * Kernel math (per block (bx,by), a faithful scalar transcription of
  * kl_deblock; channels/pixels are independent):
@@ -37,15 +47,31 @@
  *   // sim/kfm_deblock_ref.cpp (device-faithful kl_deblock scalar), float32.
  *   // Float work is IEEE float32 with no FMA contraction (mirror built
  *   // -ffp-contract=off; python golden emulates float32 per operation).
+ *   // RIG-VERIFY: kf_merge_deblock / kf_max_vh / kf_max_v / kf_max_h /
+ *   // kf_scale_qp / kf_sharpen_coeff are faithful scalar transcriptions of
+ *   // their CUDA device kernels (same arithmetic, same table contents, same
+ *   // edge behaviour incl. the padded-plane reads), but have no CPU mirror /
+ *   // Python golden yet — they are NOT covered by make test and must be
+ *   // checked on a real OpenCL device before use.
  *
  * Host seam (RIG-VERIFY): KDeblock::DeblockPlane first mirror-pads the plane
- * (8 px each side) into `src`, builds the QP table (kl_make_qp_table) and later
- * merges this accumulator (kl_merge_deblock) with a Bayer dither.  Those pad /
- * qp-table / merge steps are separate kernels/host glue; this file ports the
- * core `kl_deblock` only.  Because the CUDA block reads an 8x8 tile at an
- * offset up to +7, the src passed in must be the padded plane (a faithful host
- * config).  A block's offset index range [count_minus_1, 2*count_minus_1]
- * stays within g_deblock_offset[127] for quality <= 6 (count <= 64).
+ * (8 px each side) into `src` (kl_padv/kl_padh live in KFMFilterBase and are
+ * not ported here), builds the QP table (kf_make_qp_table) and finally merges
+ * the accumulator (kf_merge_deblock) with the Bayer dither.  Because the CUDA
+ * block reads an 8x8 tile at an offset up to +7, the src passed to kf_deblock
+ * must be the padded plane (a faithful host config).  A block's offset index
+ * range [count_minus_1, 2*count_minus_1] stays within g_deblock_offset[127]
+ * for quality <= 6 (count <= 64).
+ * Accumulator layout note: CUDA kl_deblock stores packed ushort2 at
+ * blockIdx.x*4 (out_pitch in ushort2 units) while kf_deblock writes scalar
+ * ushort at bx*8 (out_pitch in ushort units); these are the same bytes when
+ * the byte stride matches (ushort2-packed == row-major ushort, including the
+ * atomicAdd-packed halves on little-endian).  kf_merge_deblock therefore
+ * consumes kf_deblock's output directly with tmp_pitch_u4 = acc_pitch_ushort
+ * >> 2, tmp_ipitch_rows = bh*8 rows per parity slice, and the tmp base
+ * pre-offset by (+8 ushorts, +8 rows) exactly as the CUDA host pre-offsets
+ * (+2 ushort4, +8 rows).  This reconciliation is reasoned, not run — hence
+ * // RIG-VERIFY on the merge.
  * ==========================================================================*/
 
 #ifndef PX
@@ -78,6 +104,31 @@ static const int g_offy[127] = {
   0,2,4,6,1,3,5,7,0,2,4,6,1,3,5,7,0,2,4,6,1,3,5,7,0,2,4,6,1,3,5,7,
   0,4,4,0,2,6,6,2,2,6,6,2,0,4,4,0,1,5,5,1,3,7,7,3,3,7,7,3,1,5,5,1,
   1,5,5,1,3,7,7,3,3,7,7,3,1,5,5,1,0,4,4,0,2,6,6,2,2,6,6,2,0,4,4,0,
+};
+
+/* Bayer-ordered dither matrix (Deblock.cu g_ldither[8][2], each an uchar4),
+ * flattened per lane.  The scalar merge kernel indexes [y&7][(x>>2)&1][x&3]:
+ * note the middle index runs over ushort4 columns, NOT scalar pixels. */
+static const uchar g_ldither[8][2][4] = {
+  { {  0,  48,  12,  60 }, {  3,  51,  15,  63 } },
+  { { 32,  16,  44,  28 }, { 35,  19,  47,  31 } },
+  { {  8,  56,   4,  52 }, { 11,  59,   7,  55 } },
+  { { 40,  24,  36,  20 }, { 43,  27,  39,  23 } },
+  { {  2,  50,  14,  62 }, {  1,  49,  13,  61 } },
+  { { 34,  18,  46,  30 }, { 33,  17,  45,  29 } },
+  { { 10,  58,   6,  54 }, {  9,  57,   5,  53 } },
+  { { 42,  26,  38,  22 }, { 41,  25,  37,  21 } },
+};
+
+/* QP-block (qp>>3) -> sharpen-strength LUT (Deblock.cu d_sharpen_coeff /
+ * g_sharpen_coeff, 30 entries; index >= 25 saturates to 255 in the kernel). */
+static const uchar g_sharpen_coeff[30] = {
+    0,   0,   0,   0,   0, // 0
+    0,   0,   0,   0,  10, // 5(40)
+   50,  90, 120, 150, 160, // 10(80)
+  170, 180, 190, 200, 210, // 15(120)
+  220, 230, 240, 245, 250, // 20(160)
+  255, 255, 255, 255, 255, // 25(200)
 };
 
 static float kf_clampf(float v, float lo, float hi)
@@ -364,4 +415,145 @@ kernel void kf_deblock_show(
     OUTP qp = qp_table[bx + by * qp_pitch];
     int is_enabled = (kf_qp_thresh((int)qp, thresh_a, thresh_b) >= (int)(qp >> 1));
     dst[x + y * dst_pitch] = is_enabled ? (PX)230 : (PX)16;
+}
+
+/* ---------------------------------------------------------------------------
+ * kf_merge_deblock — merge the 16-bit block-parity accumulator into the final
+ * plane (kl_merge_deblock / cpu_merge_deblock twin).  Per visible pixel:
+ *   sum = acc[slice0] + acc[slice1] + acc[slice2] + acc[slice3]   (int)
+ *   v   = (float)sum * (1/(1<<shift)) + (float)dither * (1/64)
+ *   out = (PX)fmin(v, maxv)                              (C-truncation cast)
+ * where dither = g_ldither[y&7][(x>>2)&1][x&3] and shift = mergeShift =
+ * quality+6-deblockShift, maxv = (1<<bits)-1.  The 4 parity slices are stacked
+ * vertically with tmp_ipitch_rows rows each (bh*8); tmp_pitch_u4 is the
+ * accumulator pitch in ushort4 units (= acc_pitch_ushort >> 2); the tmp base
+ * is pre-offset by (+8 ushorts, +8 rows) exactly as the CUDA host passes
+ * tmpOut+2+8*pitch.  Grid: 2D (vis_width, vis_height) pixels; vis_width must
+ * be a multiple of 4 (CUDA covers width>>2 uchar4/ushort4 lanes, i.e. the
+ * width&~3 left pixels; pass vis_width = width & ~3).
+ * // RIG-VERIFY: faithful scalar transcription (lanes are independent, so the
+ * // scalar port is lane-identical to the vector CUDA kernel); no CPU mirror /
+ * // golden yet.  The tmp base/pitch-unit conventions above must be honoured
+ * // by the host exactly, and the kf_deblock-output compatibility argued in
+ * // the file header must be proven, on a real device before use.
+ * -------------------------------------------------------------------------*/
+kernel void kf_merge_deblock(
+    __global const ushort* __restrict tmp, int tmp_pitch_u4, int tmp_ipitch_rows,
+    __global PX* __restrict out, int out_pitch,
+    int vis_width, int vis_height, int shift, float maxv)
+{
+    int x = (int)get_global_id(0);
+    int y = (int)get_global_id(1);
+    if (x >= vis_width || y >= vis_height) return;
+
+    int X = x >> 2;   /* ushort4 column (dither middle index runs over this) */
+    int L = x & 3;    /* lane within the ushort4 */
+    int sum = 0;
+    for (int k = 0; k < 4; ++k) {
+        int row = tmp_ipitch_rows * k + y;
+        sum += (int)tmp[((X + row * tmp_pitch_u4) << 2) + L];
+    }
+    float v = (float)sum * (1.0f / (float)(1 << shift)) +
+              (float)g_ldither[y & 7][X & 1][L] * (1.0f / 64.0f);
+    v = fmin(v, maxv);
+    out[x + y * out_pitch] = (PX)v;
+}
+
+/* ---------------------------------------------------------------------------
+ * kf_max_vh / kf_max_v / kf_max_h — DC-mask box-max dilation used by the
+ * QPForDeblock helper (kl_max_vh / kl_max_v / kl_max_h twins; cpu_max_v /
+ * cpu_max_h are the exact CPU twins, kl_max_vh is device-only upstream).  The
+ * CUDA host instantiates RADIUS=5 in all call sites; radius is a kernel arg
+ * here.  kf_max_v is the scalar per-pixel form of the uchar4-vector CUDA
+ * kernel (lanes independent ⇒ identical); grid is pixels, not uchar4 lanes.
+ * Reads span [-radius, +radius] around every pixel, so src/dst must be the
+ * interior of a plane padded by >= radius (the CUDA host passes pad+8+8*pitch
+ * with an 8 px margin) — identical edge contract as upstream.  Grid: 2D
+ * (width, height).
+ * // RIG-VERIFY: faithful transcriptions, no mirror/golden yet.
+ * -------------------------------------------------------------------------*/
+kernel void kf_max_vh(
+    __global uchar* __restrict dst, __global const uchar* __restrict src,
+    int width, int height, int pitch, int radius)
+{
+    int x = (int)get_global_id(0);
+    int y = (int)get_global_id(1);
+    if (x >= width || y >= height) return;
+
+    uchar sum = 0;
+    for (int j = -radius; j <= radius; ++j) {
+        for (int i = -radius; i <= radius; ++i) {
+            sum = max(sum, src[(x + i) + (y + j) * pitch]);
+        }
+    }
+    dst[x + y * pitch] = sum;
+}
+
+kernel void kf_max_v(
+    __global uchar* __restrict dst, __global const uchar* __restrict src,
+    int width, int height, int pitch, int radius)
+{
+    int x = (int)get_global_id(0);
+    int y = (int)get_global_id(1);
+    if (x >= width || y >= height) return;
+
+    uchar sum = 0;
+    for (int i = -radius; i <= radius; ++i) {
+        sum = max(sum, src[x + (y + i) * pitch]);
+    }
+    dst[x + y * pitch] = sum;
+}
+
+kernel void kf_max_h(
+    __global uchar* __restrict dst, __global const uchar* __restrict src,
+    int width, int height, int pitch, int radius)
+{
+    int x = (int)get_global_id(0);
+    int y = (int)get_global_id(1);
+    if (x >= width || y >= height) return;
+
+    uchar sum = 0;
+    for (int i = -radius; i <= radius; ++i) {
+        sum = max(sum, src[(x + i) + y * pitch]);
+    }
+    dst[x + y * pitch] = sum;
+}
+
+/* ---------------------------------------------------------------------------
+ * kf_scale_qp — rescale a QP plane by codec QP-scale-type (kl_scale_qp /
+ * cpu_scale_qp twin; the ShowQP debug filter).  Per pixel:
+ *   dst = (uchar)norm_qscale(src, scale_type)
+ * The int->uchar conversion wraps mod 256 exactly like the CUDA assignment.
+ * Grid: 2D (width, height).
+ * // RIG-VERIFY: faithful transcription, no mirror/golden yet.
+ * -------------------------------------------------------------------------*/
+kernel void kf_scale_qp(
+    int width, int height,
+    __global uchar* __restrict dst, int dst_pitch,
+    __global const uchar* __restrict src, int src_pitch, int scale_type)
+{
+    int x = (int)get_global_id(0);
+    int y = (int)get_global_id(1);
+    if (x >= width || y >= height) return;
+
+    dst[x + y * dst_pitch] = (uchar)kf_norm_qscale((int)src[x + y * src_pitch], scale_type);
+}
+
+/* ---------------------------------------------------------------------------
+ * kf_sharpen_coeff — QP-block -> sharpen-strength LUT (kl_sharpen_coeff /
+ * cpu_sharpen_coeff twin; feeds the SharpenFilter, not KDeblock itself):
+ *   q = qp[x + y*qp_pitch] >> 3;  dst = (q >= 25) ? 255 : g_sharpen_coeff[q]
+ * Grid: 2D (width, height) over the QP-block grid.
+ * // RIG-VERIFY: faithful transcription, no mirror/golden yet.
+ * -------------------------------------------------------------------------*/
+kernel void kf_sharpen_coeff(
+    __global uchar* __restrict dst, int width, int height, int pitch,
+    __global const ushort* __restrict qp, int qp_pitch)
+{
+    int x = (int)get_global_id(0);
+    int y = (int)get_global_id(1);
+    if (x >= width || y >= height) return;
+
+    int q = ((int)qp[x + y * qp_pitch]) >> 3;
+    dst[x + y * pitch] = (q >= 25) ? (uchar)255 : g_sharpen_coeff[q];
 }

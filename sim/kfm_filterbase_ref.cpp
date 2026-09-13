@@ -1,7 +1,7 @@
-/* CPU mirror of the six KFM KFMFilterBase.cu kernels in
+/* CPU mirror of the seven KFM KFMFilterBase.cu kernels in
  * src/opencl/kfm/kernels/kfm_filterbase.cl.  cpu_calc_combe / cpu_merge_uvcoefs
- * / cpu_apply_uvcoefs_420 / cpu_padv / cpu_padh are exact upstream twins;
- * mode E replicates the CUDA kl_extend_coef2 device kernel (the .cl
+ * / cpu_apply_uvcoefs_420 / cpu_padv / cpu_padh / cpu_merge are exact upstream
+ * twins; mode E replicates the CUDA kl_extend_coef2 device kernel (the .cl
  * transliteration target — the upstream CPU *fallback* branch differs at rows
  * 0 and height-1, see the .cl header).
  *
@@ -34,6 +34,11 @@
  *                      hpad+vpad*pitch; padv over (width,height), then padh
  *                      over (width,height+2*vpad) from the padded top.
  *                      -> output whole buffer
+ *     G merge_block  : G width height pitch fpitch bits  nP nF
+ *                      src24(nP) src60(nP) flag(nF); dst =
+ *                      (flag*src60+(128-flag)*src24+64)>>7, stored mod 2^bits
+ *                      (the (PX) cast wrap; bits = 8 or 16).
+ *                      -> output width*height
  */
 #include <cstdio>
 #include <cstdlib>
@@ -143,6 +148,17 @@ int main(int argc,char**argv){
             buf[orgT+(width+xx)+yy*pitch]=buf[orgT+(width-xx-1)+yy*pitch];
         }
         out.swap(buf);
+    } else if(m=='G'){
+        int width=rd(),height=rd(),pitch=rd(),fpitch=rd(),bits=rd();
+        int nP=rd(),nF=rd();
+        vector<int> s24=read(nP),s60=read(nP),flag=read(nF);
+        int mask=(bits==8)?0xFF:0xFFFF;
+        for(int yy=0;yy<height;yy++)for(int xx=0;xx<width;xx++){
+            int combe=flag[xx+yy*fpitch];
+            int inv=128-combe;
+            int t=(combe*s60[xx+yy*pitch]+inv*s24[xx+yy*pitch]+64)>>7;
+            out.push_back(t&mask); // the (PX) cast wrap
+        }
     } else { fprintf(stderr,"bad mode %c\n",m); return 2; }
     FILE* o=fopen(argv[2],"w");
     for(int v:out)fprintf(o,"%d\n",v);

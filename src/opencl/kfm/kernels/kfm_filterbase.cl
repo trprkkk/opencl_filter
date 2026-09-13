@@ -19,16 +19,17 @@
  * This file supplies the four kernels defined in KFMFilterBase.cu that the
  * pipeline still needs (kf_min_frames and kf_and_coefs already live in
  * kfm_mergestatic.cl), plus the shared mirror-pad helpers kf_padv/kf_padh
- * (used by KDeblock's DeblockPlane, CombingAnalyze flag planes, ...).
- * All six are per-pixel / per-plane integer ops whose
+ * (used by KDeblock's DeblockPlane, CombingAnalyze flag planes, ...) and the
+ * MergeBlock blender kf_merge_block (used by KPatchCombe/KFMSwitch).
+ * All seven are per-pixel / per-plane integer ops whose
  * channels are independent, so the CUDA 4-wide vectorisation is equivalent to a
  * scalar translation (bit-identical for plane width a multiple of 4).
  *
  * Status:
  *   // ALG-VERIFIED (python/run_kfm_filterbase.py) vs sim/kfm_filterbase_ref.cpp
  *   //   cpu_calc_combe / cpu_merge_uvcoefs / cpu_apply_uvcoefs_420 /
- *   //   cpu_padv / cpu_padh are exact twins; cpu_extend_coef (below) is the
- *   //   CUDA kl_extend_coef2 twin that the .cl transliterates.
+ *   //   cpu_padv / cpu_padh / cpu_merge are exact twins; cpu_extend_coef
+ *   //   (below) is the CUDA kl_extend_coef2 twin that the .cl transliterates.
  *
  * Fidelity / assembly notes:
  *  - calc_combe / merge_uvcoefs / apply_uvcoefs_420 have identical CUDA and CPU
@@ -225,5 +226,39 @@ kernel void kf_padh(
     if (x < hpad && y < height) {
         dst[(-x - 1) + y * pitch] = dst[x + y * pitch];
         dst[(width + x) + y * pitch] = dst[(width - x - 1) + y * pitch];
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * kf_merge_block — MergeBlock blender (cpu_merge / kl_merge twin,
+ * KFMFilterBase.cu; driven per plane by KPatchCombe/KFMSwitch in KFMKernel.cu).
+ * Masked blend of the 24/30p base frame with the 60p bob frame under the uchar
+ * comb flag (flag is uchar even for 16-bit pixels, as upstream):
+ *   combe = flag; inv = 128 - combe
+ *   dst = (PX)((combe*src60 + inv*src24 + 64) >> 7)
+ * Lanes are independent, so the scalar port is lane-identical to the vector
+ * CUDA kernel (bit-identical for plane width a multiple of 4 — CUDA covers
+ * width4 lanes and never writes the width%4 trailing columns).  No clamping:
+ * production flags are in [0,128], but the transcription (like upstream)
+ * applies the formula verbatim over the full uchar flag domain — combe > 128
+ * makes inv negative and the >> 7 is an arithmetic shift, with the (PX) cast
+ * wrapping mod 256/65536 exactly like VHelper::cast_to.  Grid: 2D
+ * (width,height).  // ALG-VERIFIED (integer)
+ * -------------------------------------------------------------------------*/
+kernel void kf_merge_block(
+    __global       PX* __restrict dst,
+    __global const PX* __restrict src24,
+    __global const PX* __restrict src60,
+    int width, int height, int pitch,
+    __global const uchar* __restrict flag, int flag_pitch)
+{
+    int x = (int)get_global_id(0);
+    int y = (int)get_global_id(1);
+    if (x < width && y < height) {
+        int off = x + y * pitch;
+        int combe = (int)flag[x + y * flag_pitch];
+        int invcombe = 128 - combe;
+        int t = (combe * (int)src60[off] + invcombe * (int)src24[off] + 64) >> 7;
+        dst[off] = (PX)t;
     }
 }

@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
-"""Validate the six KFM KFMFilterBase.cu kernels
+"""Validate the seven KFM KFMFilterBase.cu kernels
 (kf_calc_combe, kf_merge_uvcoefs, kf_extend_coef2, kf_apply_uvcoefs_420,
-kf_padv, kf_padh) in src/opencl/kfm/kernels/kfm_filterbase.cl against the CPU
-mirror sim/kfm_filterbase_ref.cpp with an independent Python golden.
+kf_padv, kf_padh, kf_merge_block) in src/opencl/kfm/kernels/kfm_filterbase.cl
+against the CPU mirror sim/kfm_filterbase_ref.cpp with an independent Python
+golden.
 
-All six are integer-exact.  kf_calc_combe is verified over its interior rows
+All seven are integer-exact.  kf_calc_combe is verified over its interior rows
 (y in [2,height-3]); its border rows read a host-padded plane (VPAD) and are
 RIG-VERIFY (mirror/golden put a -1 sentinel there).  kf_extend_coef2 is the CUDA
 kl_extend_coef2 device kernel (upstream's CPU fallback differs at rows 0 and
 height-1; the OpenCL target is the device kernel).  kf_padv/kf_padh are the
 in-place mirror pads (verified solo plus the composed padv-then-padh 2D pad in
-upstream Deblock order).
+upstream Deblock order).  kf_merge_block is the MergeBlock masked blender
+(flag is uchar at both bit depths; full 0..255 flag sweep pins the
+negative-invcombe wrap path too).
 
 Run:  python3 python/run_kfm_filterbase.py
 """
@@ -110,6 +113,18 @@ def golden_padh(buf, width, height, pitch, hpad, org):
             b[row + (-xx - 1)] = buf[row + xx]
             b[row + (width + xx)] = buf[row + (width - xx - 1)]
     return b
+
+
+def golden_merge_block(width, height, pitch, fpitch, bits, s24, s60, flag):
+    mask = 0xFF if bits == 8 else 0xFFFF
+    out = []
+    for yy in range(height):
+        for xx in range(width):
+            combe = flag[xx + yy * fpitch]
+            t = (combe * s60[xx + yy * pitch] +
+                 (128 - combe) * s24[xx + yy * pitch] + 64) >> 7
+            out.append(t & mask)  # the (PX) cast wrap
+    return out
 
 
 def main():
@@ -302,8 +317,39 @@ def main():
                     break
             if total >= 3: break
 
+    # G: merge_block (MergeBlock masked blender; flag uchar at both depths)
+    for _ in range(200):
+        bits = rng.choice([8, 8, 16])
+        maxv = 255 if bits == 8 else 65535
+        width = rng.randint(1, 16) * 4      # mult of 4: exact CUDA coverage
+        height = rng.randint(1, 24)
+        pitch = width + rng.choice([0, 2])
+        fpitch = width + rng.choice([0, 2])
+        nP = pitch * height
+        nF = fpitch * height
+        s24 = [rng.randint(0, maxv) for _ in range(nP)]
+        s60 = [rng.randint(0, maxv) for _ in range(nP)]
+        # production domain [0,128] + full uchar sweep (wrap path)
+        if rng.random() < 0.5:
+            flag = [rng.randint(0, 128) for _ in range(nF)]
+        else:
+            flag = [rng.randint(0, 255) for _ in range(nF)]
+        hdr = [ord('G'), width, height, pitch, fpitch, bits, nP, nF]
+        got = run_mirror(hdr + s24 + s60 + flag)
+        exp = golden_merge_block(width, height, pitch, fpitch, bits,
+                                 s24, s60, flag)
+        total += 1
+        if got != exp:
+            ok = False
+            for i, (g, e) in enumerate(zip(got, exp)):
+                if g != e:
+                    print("merge_block MISMATCH", width, height, bits,
+                          "px", i, g, e)
+                    break
+            if total >= 3: break
+
     print(f"KFM FilterBase (calc_combe/merge_uvcoefs/extend_coef2/"
-          f"apply_uvcoefs_420/padv/padh): {'PASS' if ok else 'FAIL'} "
+          f"apply_uvcoefs_420/padv/padh/merge_block): {'PASS' if ok else 'FAIL'} "
           f"({total} cases)")
     return 0 if ok else 1
 

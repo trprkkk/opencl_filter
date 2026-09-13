@@ -18,7 +18,7 @@ KTGMC kernels were. KDeband was chosen first (see docs/PORT_PLAN.md §5).
 | File | AVS functions | Port status here |
 |---|---|---|
 | `KDeband.cu` | `KTemporalNR`, `KDeband`, `KEdgeLevel` | **KDeband core done**; **KEdgeLevel done**; **KTemporalNR done** |
-| `KFMKernel.cu` | `KPatchCombe`, `KFMSwitch`, `KFMPad`, `KFMDecimate`, `AssumeDevice` | not started |
+| `KFMKernel.cu` | `KPatchCombe`, `KFMSwitch`, `KFMPad`, `KFMDecimate`, `AssumeDevice` | inventoried: host-only, no device kernels (see below; its only kernel dep `kl_merge` is ported as `kf_merge_block`) |
 | `CombingAnalyze.cu` | `KFMSuper`, `KCleanSuper`, `KPreCycleAnalyze(_Show)`, `KFMSuperShow`, `KTelecine(_Super)`, `KSwitchFlag`, `KContainsCombe`, `KCombeMask`, `KRemoveCombe` | not started |
 | `Deblock.cu` | `KDeblock`, `QPClip`, `ShowQP`, `FrameType` | **all 11 device kernels transcribed** (`kf_deblock`, `kf_make_qp_table`, `kf_deblock_show` ALG-VERIFIED; `kf_merge_deblock`, `kf_max_vh/v/h`, `kf_scale_qp`, `kf_sharpen_coeff`, `kf_sharpen`, `kf_show_sharpen_coeff` in the separate provisional `kfm_deblock_rig.cl`, `// RIG-VERIFY`, handoff spec in `docs/RIG_HANDOFF_KDEBLOCK.md`; QPClip is a no-op pass-through) |
 | `DecombeUCF.cu` | `KCFieldDiff`, `KCFrameDiffDup`, `KNoiseClip`, `KAnalyzeNoise`, `KDecombUCF*` | **KNoiseClip done** (see below) |
@@ -177,13 +177,13 @@ filter is not run here. `kf_and_coefs` float contraction is a `// RIG-VERIFY`
 item (CUDA may fuse `a*b+c` into fma; <1 ulp difference).
 
 ### `KFMFilterBase` coefficient kernels (kf_calc_combe / kf_merge_uvcoefs /
-kf_extend_coef2 / kf_apply_uvcoefs_420 / kf_padv / kf_padh,
+kf_extend_coef2 / kf_apply_uvcoefs_420 / kf_padv / kf_padh / kf_merge_block,
 src/opencl/kfm/kernels/kfm_filterbase.cl)
 
 `KFMFilterBase.cu` is the shared base class and defines the coefficient kernels
 that KAnalyzeStatic is assembled from (`cpu_*` twins exist in the same file).
-Six are ported here and `// ALG-VERIFIED` via `python/run_kfm_filterbase.py`
-(1130 cases) against the CPU mirror `sim/kfm_filterbase_ref.cpp` and an
+Seven are ported here and `// ALG-VERIFIED` via `python/run_kfm_filterbase.py`
+(1330 cases) against the CPU mirror `sim/kfm_filterbase_ref.cpp` and an
 independent Python golden. All are per-pixel/per-plane integer ops (no float),
 so the CUDA 4-wide vectorisation is equivalent to a scalar port.
 
@@ -214,11 +214,41 @@ so the CUDA 4-wide vectorisation is equivalent to a scalar port.
   `(hpad,height)`; preconditions `vpad <= height`, `hpad <= width` (always true
   upstream: pad counts are 8 for Deblock, 1 for CombingAnalyze flag planes).
   Verified solo plus the composed padv→padh order, 8/16-bit.
+- `kf_merge_block` — the `MergeBlock` masked blender (`cpu_merge`/`kl_merge`
+  — exact twins; driven per plane by KPatchCombe/KFMSwitch): `dst =
+  (flag*src60 + (128-flag)*src24 + 64) >> 7` with the uchar comb flag (uchar
+  even for 16-bit pixels, as upstream). Same formula family as
+  `kf_merge_static` but a different twin/roles; no clamping — the full uchar
+  flag domain is transcribed verbatim (flag > 128 drives the addend negative
+  through an arithmetic `>> 7`, with the `(PX)` cast wrapping exactly like
+  `VHelper::cast_to`), and the 0..255 flag sweep pins that path. 8/16-bit.
 
 These, together with `kf_min_frames` and `kf_and_coefs` (in kfm_mergestatic.cl),
 make KAnalyzeStatic's kernel set complete (see the MergeStatic section for the
 host-assembly seam). The pad helpers additionally close the KDeblock pad-kernel
 gap (see below) — only the pad/merge *host sequencing* remains.
+
+### `KFMKernel.cu` inventory (host-only — no device kernels)
+
+All 875 lines read (upstream `8e086bb`): the file defines **zero**
+`__global__`/`__device__` functions and issues zero kernel launches. Its five
+filters, with dispositions:
+
+- `KPatchCombe` — pulldown-aware 24p/30p frame selection + one `MergeBlock`
+  call per frame. Kernel-complete via `kf_merge_block`; the frame-index
+  bookkeeping is AviSynth host logic.
+- `KFMSwitch` — 60/30/24/UCF frame-switch state machine + timecode-file
+  writer + `MergeBlock` calls. Kernel-complete via `kf_merge_block`; the
+  switching/durations logic is host. (Its `VisualizeFlag` is a CPU-only debug
+  visualisation, not a device kernel — not ported.)
+- `KFMPad` — VPAD vertical pad via `CopyFrameAndPad` (device path:
+  `kl_copy_pad`/`kl_copy_pad_2plane`; CPU path: copy + `kl_padv`). Dispatch
+  is host; the pad kernels belong to the CombingAnalyze batch (see below).
+- `KFMDecimate` — pure frame-index remapping from a durations file. No pixels
+  touched; nothing to port.
+- `AssumeDevice` — pure cache-hint filter. Nothing to port.
+
+So KFMKernel.cu is closed: nothing further to transcribe here.
 
 ### `KNoiseClip` (kf_noise_clip, src/opencl/kfm/kernels/kfm_noiseclip.cl)
 
@@ -370,9 +400,18 @@ checklist) is `docs/RIG_HANDOFF_KDEBLOCK.md`.
   pair additionally mandates a device run.
 - Remaining KFM families: CombingAnalyze.cu (KFMSuper/…; super-frame motion
   state) and the rest of DecombeUCF.cu (KDecombUCF* — heavy multi-clip host
-  pipelines). KFMKernel.cu and Deblock QPClip are pure host/props filters with
-  no device kernels (FrameType is CPU-only); ShowQP's kernel `kl_scale_qp` is
-  transcribed (`kf_scale_qp`, `// RIG-VERIFY`), its frame-assembly is host.
+  pipelines). Deblock QPClip is a pure host/props filter with no device kernel
+  (FrameType is CPU-only); ShowQP's kernel `kl_scale_qp` is transcribed
+  (`kf_scale_qp`, `// RIG-VERIFY`), its frame-assembly is host.
+- Unported `KFMFilterBase.cu` kernels (all serve CombingAnalyze — one batch):
+  `kl_average`/`cpu_average` (field-pair `(a+b)>>1`, CombingAnalyze.cu:888),
+  `kl_max`/`cpu_max` (uint8 2-plane max, CombingAnalyze.cu:1054/1430),
+  `kl_copy_pad`/`kl_copy_pad_2plane` (mirror-pad copy with the uchar4
+  lane-reversal quirk; also backs `KFMPad`), `kl_max_extend_blocks_h/v` +
+  `cpu_max_extend_blocks` (`ExtendBlocks`, out-of-place h/v ping-pong vs one
+  in-place CPU twin — needs care), `kl_analyze_frame`, `kl_merge_uvflags`,
+  `kl_copy_border` (+ twins). `kl_copy`/`kl_fill` stay covered by KTGMC
+  `kt_copy` (memcpy-equivalent, no port planned).
 
 ## Notes / licence
 

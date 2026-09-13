@@ -175,6 +175,9 @@ To get a working deinterlacer you must port the mvtools-equivalent layers:
   `kf_extend_coef2`, `kf_apply_uvcoefs_420`, in `kfm_filterbase.cl`) plus
   `kf_min_frames`/`kf_and_coefs` (in `kfm_mergestatic.cl`); only the VPAD-pad
   host assembly of the KAnalyzeStatic pipeline is left (`// RIG-VERIFY`).
+  The same file also hosts the shared mirror pads `kf_padv`/`kf_padh`
+  (ALG-VERIFIED, solo + composed padv→padh), closing the KDeblock pad-kernel
+  gap.
   **KNoiseClip** (`kf_noise_clip`, from DecombeUCF.cu, in `kfm_noiseclip.cl`)
   is also ALG-VERIFIED — a self-contained 8-bit filter that is
   kernel-complete. The **KDeblock core** `kf_deblock` (Deblock.cu `kl_deblock`,

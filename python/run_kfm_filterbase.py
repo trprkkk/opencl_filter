@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Validate the four KFM KFMFilterBase.cu coefficient kernels
-(kf_calc_combe, kf_merge_uvcoefs, kf_extend_coef2, kf_apply_uvcoefs_420) in
-src/opencl/kfm/kernels/kfm_filterbase.cl against the CPU mirror
-sim/kfm_filterbase_ref.cpp with an independent Python golden.
+"""Validate the six KFM KFMFilterBase.cu kernels
+(kf_calc_combe, kf_merge_uvcoefs, kf_extend_coef2, kf_apply_uvcoefs_420,
+kf_padv, kf_padh) in src/opencl/kfm/kernels/kfm_filterbase.cl against the CPU
+mirror sim/kfm_filterbase_ref.cpp with an independent Python golden.
 
-All four are integer-exact.  kf_calc_combe is verified over its interior rows
+All six are integer-exact.  kf_calc_combe is verified over its interior rows
 (y in [2,height-3]); its border rows read a host-padded plane (VPAD) and are
 RIG-VERIFY (mirror/golden put a -1 sentinel there).  kf_extend_coef2 is the CUDA
 kl_extend_coef2 device kernel (upstream's CPU fallback differs at rows 0 and
-height-1; the OpenCL target is the device kernel).
+height-1; the OpenCL target is the device kernel).  kf_padv/kf_padh are the
+in-place mirror pads (verified solo plus the composed padv-then-padh 2D pad in
+upstream Deblock order).
 
 Run:  python3 python/run_kfm_filterbase.py
 """
@@ -83,6 +85,31 @@ def golden_apply420(widthUV, heightUV, pitchY, pitchUV, fY):
             uout.append(avg)
             vout.append(avg)
     return uout + vout
+
+
+def golden_padv(buf, width, height, pitch, vpad, org):
+    # out-of-place w.r.t. the pristine input: reads never observe writes,
+    # which holds iff the pad is race-free (reads interior, writes pad rows)
+    b = list(buf)
+    for yy in range(vpad):
+        top_dst = org + (-yy - 1) * pitch
+        top_src = org + yy * pitch
+        bot_dst = org + (height + yy) * pitch
+        bot_src = org + (height - yy - 1) * pitch
+        for xx in range(width):
+            b[top_dst + xx] = buf[top_src + xx]
+            b[bot_dst + xx] = buf[bot_src + xx]
+    return b
+
+
+def golden_padh(buf, width, height, pitch, hpad, org):
+    b = list(buf)
+    for yy in range(height):
+        row = org + yy * pitch
+        for xx in range(hpad):
+            b[row + (-xx - 1)] = buf[row + xx]
+            b[row + (width + xx)] = buf[row + (width - xx - 1)]
+    return b
 
 
 def main():
@@ -200,8 +227,84 @@ def main():
                     break
             if total >= 3: break
 
+    # V: padv (in-place vertical mirror pad)
+    for _ in range(150):
+        bits = rng.choice([8, 8, 16])
+        maxv = 255 if bits == 8 else 65535
+        width = rng.randint(1, 40)
+        height = rng.randint(2, 24)
+        vpad = min(rng.choice([1, 2, 4, 8]), height)
+        pitch = width + rng.choice([0, 1, 3])
+        n = pitch * (height + 2 * vpad)
+        buf = [rng.randint(0, maxv) for _ in range(n)]
+        org = vpad * pitch
+        hdr = [ord('V'), width, height, pitch, vpad, n]
+        got = run_mirror(hdr + buf)
+        exp = golden_padv(buf, width, height, pitch, vpad, org)
+        total += 1
+        if got != exp:
+            ok = False
+            for i, (g, e) in enumerate(zip(got, exp)):
+                if g != e:
+                    print("padv MISMATCH", width, height, pitch, vpad,
+                          "px", i, g, e)
+                    break
+            if total >= 3: break
+
+    # H: padh (in-place horizontal mirror pad)
+    for _ in range(150):
+        bits = rng.choice([8, 8, 16])
+        maxv = 255 if bits == 8 else 65535
+        width = rng.randint(2, 40)
+        height = rng.randint(1, 24)
+        hpad = min(rng.choice([1, 2, 4, 8]), width)
+        pitch = width + 2 * hpad + rng.choice([0, 1, 3])
+        n = pitch * height
+        buf = [rng.randint(0, maxv) for _ in range(n)]
+        org = hpad
+        hdr = [ord('H'), width, height, pitch, hpad, n]
+        got = run_mirror(hdr + buf)
+        exp = golden_padh(buf, width, height, pitch, hpad, org)
+        total += 1
+        if got != exp:
+            ok = False
+            for i, (g, e) in enumerate(zip(got, exp)):
+                if g != e:
+                    print("padh MISMATCH", width, height, pitch, hpad,
+                          "px", i, g, e)
+                    break
+            if total >= 3: break
+
+    # B: padv then padh (composed 2D pad, upstream Deblock order)
+    for _ in range(150):
+        bits = rng.choice([8, 8, 16])
+        maxv = 255 if bits == 8 else 65535
+        width = rng.randint(2, 32)
+        height = rng.randint(2, 20)
+        vpad = min(rng.choice([1, 2, 4, 8]), height)
+        hpad = min(rng.choice([1, 2, 4, 8]), width)
+        pitch = width + 2 * hpad + rng.choice([0, 1, 3])
+        n = pitch * (height + 2 * vpad)
+        buf = [rng.randint(0, maxv) for _ in range(n)]
+        org = hpad + vpad * pitch
+        hdr = [ord('B'), width, height, pitch, vpad, hpad, n]
+        got = run_mirror(hdr + buf)
+        step1 = golden_padv(buf, width, height, pitch, vpad, org)
+        exp = golden_padh(step1, width, height + 2 * vpad, pitch, hpad,
+                          org - vpad * pitch)
+        total += 1
+        if got != exp:
+            ok = False
+            for i, (g, e) in enumerate(zip(got, exp)):
+                if g != e:
+                    print("pad-both MISMATCH", width, height, pitch,
+                          vpad, hpad, "px", i, g, e)
+                    break
+            if total >= 3: break
+
     print(f"KFM FilterBase (calc_combe/merge_uvcoefs/extend_coef2/"
-          f"apply_uvcoefs_420): {'PASS' if ok else 'FAIL'} ({total} cases)")
+          f"apply_uvcoefs_420/padv/padh): {'PASS' if ok else 'FAIL'} "
+          f"({total} cases)")
     return 0 if ok else 1
 
 

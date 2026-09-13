@@ -137,15 +137,17 @@ Makefile                       # make test  (no OpenCL required)
   coefficient kernels are in kfm_filterbase.cl. **ALG-VERIFIED** via
   `python/run_kfm_mergestatic.py` (580 cases: CPU mirror
   `sim/kfm_mergestatic_ref.cpp` vs an independent float32-exact Python golden).
-- `kfm_filterbase.cl`: **KFM KFMFilterBase coefficient kernels** — `kf_calc_combe`
-  (CompareFields combing, `|a+4c+e-3(b+d)|>>2` clamped [0,255]; interior
-  ALG-VERIFIED, border needs a VPAD-padded plane on the rig),
+- `kfm_filterbase.cl`: **KFM KFMFilterBase coefficient + pad kernels** —
+  `kf_calc_combe` (CompareFields combing, `|a+4c+e-3(b+d)|>>2` clamped [0,255];
+  interior ALG-VERIFIED, border needs a VPAD-padded plane on the rig),
   `kf_merge_uvcoefs` (fold UV into Y), `kf_extend_coef2` (ExtendCoefs; = the
   CUDA `kl_extend_coef2` device kernel — upstream's CPU fallback differs at the
-  extreme rows), `kf_apply_uvcoefs_420` (YV12 Y→UV). These plus
+  extreme rows), `kf_apply_uvcoefs_420` (YV12 Y→UV), plus the shared in-place
+  mirror pads `kf_padv`/`kf_padh` (exact `cpu_padv`/`cpu_padh` twins, race-free;
+  2D pad = padv-then-padh host sequencing, as DeblockPlane does). These plus
   `kf_min_frames`/`kf_and_coefs` complete KAnalyzeStatic's kernel set (only the
   VPAD-pad host assembly remains, `// RIG-VERIFY`). **ALG-VERIFIED** via
-  `python/run_kfm_filterbase.py` (680 cases, integer-exact).
+  `python/run_kfm_filterbase.py` (1130 cases, integer-exact).
 - `kfm_noiseclip.cl`: **KFM KNoiseClip** — `kf_noise_clip`, faithful to
   `cpu_noise_clip`/`dev_limitter` (KFM/DecombeUCF.cu, MIT). Self-contained
   **8-bit-only** filter that maps each src pixel against a `noise` pixel into

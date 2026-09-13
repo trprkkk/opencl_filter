@@ -18,15 +18,17 @@
  *   ApplyUVCoefs(flagc)             -> kf_apply_uvcoefs_420 (Y -> UV)
  * This file supplies the four kernels defined in KFMFilterBase.cu that the
  * pipeline still needs (kf_min_frames and kf_and_coefs already live in
- * kfm_mergestatic.cl).  All four are per-pixel / per-plane integer ops whose
+ * kfm_mergestatic.cl), plus the shared mirror-pad helpers kf_padv/kf_padh
+ * (used by KDeblock's DeblockPlane, CombingAnalyze flag planes, ...).
+ * All six are per-pixel / per-plane integer ops whose
  * channels are independent, so the CUDA 4-wide vectorisation is equivalent to a
  * scalar translation (bit-identical for plane width a multiple of 4).
  *
  * Status:
  *   // ALG-VERIFIED (python/run_kfm_filterbase.py) vs sim/kfm_filterbase_ref.cpp
- *   //   cpu_calc_combe / cpu_merge_uvcoefs / cpu_apply_uvcoefs_420 are exact
- *   //   twins; cpu_extend_coef (below) is the CUDA kl_extend_coef2 twin that
- *   //   the .cl transliterates.
+ *   //   cpu_calc_combe / cpu_merge_uvcoefs / cpu_apply_uvcoefs_420 /
+ *   //   cpu_padv / cpu_padh are exact twins; cpu_extend_coef (below) is the
+ *   //   CUDA kl_extend_coef2 twin that the .cl transliterates.
  *
  * Fidelity / assembly notes:
  *  - calc_combe / merge_uvcoefs / apply_uvcoefs_420 have identical CUDA and CPU
@@ -52,6 +54,15 @@
  *    KAnalyzeStatic uses are 0..128-scaled values, so this matches).
  *  - merge_uvcoefs / apply_uvcoefs_420 assume YV12-style logUVx=logUVy=1
  *    (KAnalyzeStatic enforces 420).
+ *  - padv/padh are in-place mirror pads: dst points at the interior origin of
+ *    a buffer with vpad/hpad spare rows/columns.  Reads touch only interior
+ *    rows/columns and writes only pad rows/columns, so each kernel is race-free
+ *    in a single launch; the 2D pad is padv-then-padh (padh over the full
+ *    height+2*vpad), sequenced by the host as upstream does.  Preconditions
+ *    (faithful host config, always true upstream): vpad <= height,
+ *    hpad <= width.  CUDA reads the pad index from the unguarded threadIdx
+ *    (blockDim == pad count at every call site); the .cl guards x/y explicitly
+ *    over exactly the twins' loop domain.
  * ==========================================================================*/
 
 #ifndef PX
@@ -174,5 +185,45 @@ kernel void kf_apply_uvcoefs_420(
         int offUV = x + y * pitchUV;
         fU[offUV] = (PX)avg;
         fV[offUV] = (PX)avg;
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * kf_padv — vertical mirror pad (cpu_padv / kl_padv twin, KFMFilterBase.cu).
+ * In-place: dst points at the interior (visible) origin inside a buffer with
+ * >= vpad spare rows above and below.  For y in [0,vpad), x in [0,width):
+ *   row -y-1 <- row y            (top mirror)
+ *   row height+y <- row height-y-1 (bottom mirror)
+ * Grid: 2D (width, vpad).  // ALG-VERIFIED (integer)
+ * -------------------------------------------------------------------------*/
+kernel void kf_padv(
+    __global PX* __restrict dst,
+    int width, int height, int pitch, int vpad)
+{
+    int x = (int)get_global_id(0);
+    int y = (int)get_global_id(1);
+    if (x < width && y < vpad) {
+        dst[x + (-y - 1) * pitch] = dst[x + y * pitch];
+        dst[x + (height + y) * pitch] = dst[x + (height - y - 1) * pitch];
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * kf_padh — horizontal mirror pad (cpu_padh / kl_padh twin, KFMFilterBase.cu).
+ * In-place: dst points at the interior origin inside a buffer with >= hpad
+ * spare columns left and right.  For y in [0,height), x in [0,hpad):
+ *   col -x-1 <- col x            (left mirror)
+ *   col width+x <- col width-x-1 (right mirror)
+ * Grid: 2D (hpad, height).  // ALG-VERIFIED (integer)
+ * -------------------------------------------------------------------------*/
+kernel void kf_padh(
+    __global PX* __restrict dst,
+    int width, int height, int pitch, int hpad)
+{
+    int x = (int)get_global_id(0);
+    int y = (int)get_global_id(1);
+    if (x < hpad && y < height) {
+        dst[(-x - 1) + y * pitch] = dst[x + y * pitch];
+        dst[(width + x) + y * pitch] = dst[(width - x - 1) + y * pitch];
     }
 }

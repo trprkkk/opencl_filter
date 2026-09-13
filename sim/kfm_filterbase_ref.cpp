@@ -1,8 +1,9 @@
-/* CPU mirror of the four KFM KFMFilterBase.cu kernels in
+/* CPU mirror of the six KFM KFMFilterBase.cu kernels in
  * src/opencl/kfm/kernels/kfm_filterbase.cl.  cpu_calc_combe / cpu_merge_uvcoefs
- * / cpu_apply_uvcoefs_420 are exact upstream twins; mode E replicates the CUDA
- * kl_extend_coef2 device kernel (the .cl transliteration target — the upstream
- * CPU *fallback* branch differs at rows 0 and height-1, see the .cl header).
+ * / cpu_apply_uvcoefs_420 / cpu_padv / cpu_padh are exact upstream twins;
+ * mode E replicates the CUDA kl_extend_coef2 device kernel (the .cl
+ * transliteration target — the upstream CPU *fallback* branch differs at rows
+ * 0 and height-1, see the .cl header).
  *
  * Usage: kfm_filterbase_ref <in> <out>
  *   All ints on one line.  Modes:
@@ -18,6 +19,21 @@
  *     A apply_uvcoefs_420: A widthUV heightUV pitchY pitchUV  nY nUV
  *                      fY(...) fU(...) fV(...)
  *                      -> output = U plane then V plane (each widthUV*heightUV)
+ *     V padv         : V width height pitch vpad  nBuf  buf(...)
+ *                      buf = full plane pitch*(height+2*vpad), interior origin
+ *                      at vpad*pitch; in-place vertical mirror pad.
+ *                      -> output whole buffer
+ *     H padh         : H width height pitch hpad  nBuf  buf(...)
+ *                      buf = full plane pitch*height (pitch >= width+2*hpad),
+ *                      interior origin at hpad; in-place horizontal mirror pad.
+ *                      -> output whole buffer
+ *     B both (padv then padh, upstream Deblock order):
+ *                      B width height pitch vpad hpad  nBuf  buf(...)
+ *                      buf = full plane pitch*(height+2*vpad)
+ *                      (pitch >= width+2*hpad), interior origin at
+ *                      hpad+vpad*pitch; padv over (width,height), then padh
+ *                      over (width,height+2*vpad) from the padded top.
+ *                      -> output whole buffer
  */
 #include <cstdio>
 #include <cstdlib>
@@ -94,6 +110,39 @@ int main(int argc,char**argv){
             out.push_back(fU[xx+yy*pitchUV]);
         for(int yy=0;yy<heightUV;yy++)for(int xx=0;xx<widthUV;xx++)
             out.push_back(fV[xx+yy*pitchUV]);
+    } else if(m=='V'){
+        int width=rd(),height=rd(),pitch=rd(),vpad=rd(),nBuf=rd();
+        vector<int> buf=read(nBuf);
+        int org=vpad*pitch; // interior origin
+        for(int yy=0;yy<vpad;yy++)for(int xx=0;xx<width;xx++){
+            buf[org+xx+(-yy-1)*pitch]=buf[org+xx+yy*pitch];
+            buf[org+xx+(height+yy)*pitch]=buf[org+xx+(height-yy-1)*pitch];
+        }
+        out.swap(buf);
+    } else if(m=='H'){
+        int width=rd(),height=rd(),pitch=rd(),hpad=rd(),nBuf=rd();
+        vector<int> buf=read(nBuf);
+        int org=hpad; // interior origin
+        for(int yy=0;yy<height;yy++)for(int xx=0;xx<hpad;xx++){
+            buf[org+(-xx-1)+yy*pitch]=buf[org+xx+yy*pitch];
+            buf[org+(width+xx)+yy*pitch]=buf[org+(width-xx-1)+yy*pitch];
+        }
+        out.swap(buf);
+    } else if(m=='B'){
+        int width=rd(),height=rd(),pitch=rd(),vpad=rd(),hpad=rd(),nBuf=rd();
+        vector<int> buf=read(nBuf);
+        int org=hpad+vpad*pitch; // interior origin
+        for(int yy=0;yy<vpad;yy++)for(int xx=0;xx<width;xx++){ // padv first
+            buf[org+xx+(-yy-1)*pitch]=buf[org+xx+yy*pitch];
+            buf[org+xx+(height+yy)*pitch]=buf[org+xx+(height-yy-1)*pitch];
+        }
+        int orgT=org-vpad*pitch; // top of the padded column range
+        int heightP=height+2*vpad;
+        for(int yy=0;yy<heightP;yy++)for(int xx=0;xx<hpad;xx++){ // then padh
+            buf[orgT+(-xx-1)+yy*pitch]=buf[orgT+xx+yy*pitch];
+            buf[orgT+(width+xx)+yy*pitch]=buf[orgT+(width-xx-1)+yy*pitch];
+        }
+        out.swap(buf);
     } else { fprintf(stderr,"bad mode %c\n",m); return 2; }
     FILE* o=fopen(argv[2],"w");
     for(int v:out)fprintf(o,"%d\n",v);

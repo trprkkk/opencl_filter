@@ -49,7 +49,9 @@ lane-identical by construction. Your verification must still prove it.
   transcription; they need a sampler/image redesign plus the SharpenFilter
   host (incl. the GaussResize unsharp clip). Not in the package; do not invent
   them here.
-- Pad kernels `kl_padv`/`kl_padh` (live in KFMFilterBase, not Deblock.cu).
+- Pad kernels `kl_padv`/`kl_padh` (live in KFMFilterBase, not Deblock.cu) —
+  since ported as `kf_padv`/`kf_padh` in `kfm_filterbase.cl`, `// ALG-VERIFIED`;
+  no action needed here.
 - The KDeblock **host assembly** (DeblockPlane: pad → qp-table → deblock →
   merge sequencing, AviSynth glue). You verify kernels, not the filter.
 - KTGMC `ktgmc_motion.cl` RIG-VERIFY items (pad/mirror, `kt_most_freq_mv`,

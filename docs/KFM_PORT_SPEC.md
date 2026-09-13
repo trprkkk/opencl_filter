@@ -177,12 +177,13 @@ filter is not run here. `kf_and_coefs` float contraction is a `// RIG-VERIFY`
 item (CUDA may fuse `a*b+c` into fma; <1 ulp difference).
 
 ### `KFMFilterBase` coefficient kernels (kf_calc_combe / kf_merge_uvcoefs /
-kf_extend_coef2 / kf_apply_uvcoefs_420, src/opencl/kfm/kernels/kfm_filterbase.cl)
+kf_extend_coef2 / kf_apply_uvcoefs_420 / kf_padv / kf_padh,
+src/opencl/kfm/kernels/kfm_filterbase.cl)
 
 `KFMFilterBase.cu` is the shared base class and defines the coefficient kernels
 that KAnalyzeStatic is assembled from (`cpu_*` twins exist in the same file).
-Four are ported here and `// ALG-VERIFIED` via `python/run_kfm_filterbase.py`
-(680 cases) against the CPU mirror `sim/kfm_filterbase_ref.cpp` and an
+Six are ported here and `// ALG-VERIFIED` via `python/run_kfm_filterbase.py`
+(1130 cases) against the CPU mirror `sim/kfm_filterbase_ref.cpp` and an
 independent Python golden. All are per-pixel/per-plane integer ops (no float),
 so the CUDA 4-wide vectorisation is equivalent to a scalar port.
 
@@ -203,10 +204,21 @@ so the CUDA 4-wide vectorisation is equivalent to a scalar port.
   the divergence is upstream's and only touches 2 rows of a band coefficient.)
 - `kf_apply_uvcoefs_420` — `ApplyUVCoefs` core (YV12): sets `fU=fV` to the
   rounded 2×2 average of the Y coefficient plane.
+- `kf_padv` / `kf_padh` — the shared in-place mirror-pad helpers
+  (`cpu_padv`/`kl_padv`, `cpu_padh`/`kl_padh` — exact twins): `dst` points at
+  the interior origin of a buffer with `vpad`/`hpad` spare rows/columns;
+  `padv` mirrors rows (`-y-1 ← y`, `height+y ← height-y-1`), `padh` mirrors
+  columns. Each kernel is race-free in one launch (reads interior, writes pad
+  only); the 2D pad is padv-then-padh sequenced by the host (as upstream's
+  DeblockPlane does: padh over `height+2*vpad`). Grids 2D `(width,vpad)` /
+  `(hpad,height)`; preconditions `vpad <= height`, `hpad <= width` (always true
+  upstream: pad counts are 8 for Deblock, 1 for CombingAnalyze flag planes).
+  Verified solo plus the composed padv→padh order, 8/16-bit.
 
 These, together with `kf_min_frames` and `kf_and_coefs` (in kfm_mergestatic.cl),
 make KAnalyzeStatic's kernel set complete (see the MergeStatic section for the
-host-assembly seam).
+host-assembly seam). The pad helpers additionally close the KDeblock pad-kernel
+gap (see below) — only the pad/merge *host sequencing* remains.
 
 ### `KNoiseClip` (kf_noise_clip, src/opencl/kfm/kernels/kfm_noiseclip.cl)
 
@@ -249,12 +261,12 @@ Fidelity notes (honest):
   cells are unused), which is what the scalar 8-stride port does. Output
   identical.
 - Host seam (RIG-VERIFY): KDeblock::DeblockPlane first mirror-pads the plane
-  (8 px/side) into `src` (pad kernels `kl_padv`/`kl_padh` live in
-  KFMFilterBase, not ported here) and later merges the accumulator — that
-  merge is transcribed as `kf_merge_deblock` (see below) but its
-  accumulator-layout reconciliation is reasoned, not run. The core DCT stage
-  plus the QP-table/show helpers are verified on a self-consistent padded-src
-  config.
+  (8 px/side) into `src` (pad kernels ported as `kf_padv`/`kf_padh`, see the
+  KFMFilterBase section — only their host sequencing is left) and later merges
+  the accumulator — that merge is transcribed as `kf_merge_deblock` (see below)
+  but its accumulator-layout reconciliation is reasoned, not run. The core DCT
+  stage plus the QP-table/show helpers are verified on a self-consistent
+  padded-src config.
 - `QPClip` (same source file) is a no-op host filter that only copies frame
   properties to a 2×2 Y8 frame — no kernel, so nothing to port/verify there.
 
@@ -335,8 +347,8 @@ checklist) is `docs/RIG_HANDOFF_KDEBLOCK.md`.
   coeff plane through a CUDA texture object — need a sampler/image redesign +
   the SharpenFilter host, incl. the GaussResize unsharp clip; note the device
   `kl_sharpen` clamps `x+1` by `height-1`, an upstream quirk to preserve), the
-  KFMFilterBase pad kernels (`kl_padv`/`kl_padh`), the KDeblock pad/merge host
-  glue, and the rig proof of the merge accumulator-layout reconciliation (see
+  KDeblock pad/merge host sequencing (`kf_padv`/`kf_padh` themselves are done),
+  and the rig proof of the merge accumulator-layout reconciliation (see
   above). Upgrade path: the six `kfm_deblock_rig.cl` kernels are packaged for
   handoff in `docs/RIG_HANDOFF_KDEBLOCK.md` — `kf_max_v/h`, `kf_scale_qp`,
   `kf_sharpen_coeff` have exact CPU twins and `kf_merge_deblock`/`kf_max_vh`

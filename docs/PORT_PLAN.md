@@ -186,11 +186,13 @@ To get a working deinterlacer you must port the mvtools-equivalent layers:
   Python golden. Its QP-table builder `kf_make_qp_table` and `show==2`
   visualiser `kf_deblock_show` are ALG-VERIFIED as well (integer-exact;
   `python/run_kfm_deblock_qp.py`). The Bayer `kf_merge_deblock` (+`g_ldither`),
-  DC-mask `kf_max_vh/v/h`, ShowQP `kf_scale_qp` and sharpen-LUT
-  `kf_sharpen_coeff` live separately in the provisional `kfm_deblock_rig.cl`
-  as `// RIG-VERIFY` (faithful, unverified — not covered by `make test`,
-  handoff spec in `docs/RIG_HANDOFF_KDEBLOCK.md`); only the pad host step
-  and the merge accumulator-layout rig proof remain open.
+  DC-mask `kf_max_vh/v/h`, ShowQP `kf_scale_qp`, sharpen-LUT
+  `kf_sharpen_coeff` and the SharpenFilter pair `kf_sharpen` /
+  `kf_show_sharpen_coeff` live separately in the provisional
+  `kfm_deblock_rig.cl` as `// RIG-VERIFY` (faithful, unverified — not covered
+  by `make test`, handoff spec in `docs/RIG_HANDOFF_KDEBLOCK.md`); all 11
+  Deblock.cu device kernels are transcribed, with only host sequencing and
+  rig proofs remaining open.
   Full KFM map + next candidates (CombingAnalyze / remaining DecombeUCF /
   Deblock helpers) are in `docs/KFM_PORT_SPEC.md`.
 

@@ -2,13 +2,13 @@
 
 This document hands the **unverified** KDeblock-family OpenCL kernels to another
 agent (human or AI) for verification. It is written to be self-sufficient: if
-you follow it top to bottom you can verify all six kernels without asking the
+you follow it top to bottom you can verify all eight kernels without asking the
 original author anything.
 
 ## 0. TL;DR
 
 - **Package under verification:** `src/opencl/kfm/kernels/kfm_deblock_rig.cl`
-  (6 kernels + 2 tables, all `// RIG-VERIFY`, deliberately separated from the
+  (8 kernels + 2 tables, all `// RIG-VERIFY`, deliberately separated from the
   verified `kfm_deblock.cl`).
 - **Ground truth:** `rigaya/AviSynthCUDAFilters`, `KFM/Deblock.cu`, commit
   `cceb8da0e623e6bf5eea2cf655b06d4428e1600b` (§2).
@@ -19,11 +19,12 @@ original author anything.
 - **Closest template to copy:** `sim/kfm_deblock_qp_ref.cpp` +
   `python/run_kfm_deblock_qp.py` (same family, same harness style).
 - **Suggested order (easy first):** `kf_scale_qp` → `kf_sharpen_coeff` →
-  `kf_max_h` → `kf_max_v` → `kf_max_vh` → `kf_merge_deblock` (hardest).
+  `kf_max_h` → `kf_max_v` → `kf_max_vh` → `kf_merge_deblock` →
+  `kf_show_sharpen_coeff` → `kf_sharpen` (last two need a device comparison).
 
 ## 1. What is in the package (and what is not)
 
-### 1.1 In scope — the six kernels in `kfm_deblock_rig.cl`
+### 1.1 In scope — the eight kernels in `kfm_deblock_rig.cl`
 
 | # | OpenCL kernel | CUDA device twin | Exact CPU twin? | Difficulty |
 |---|---|---|---|---|
@@ -33,22 +34,26 @@ original author anything.
 | 4 | `kf_max_h` | `kl_max_h` | `cpu_max_h` (exact) | easy |
 | 5 | `kf_scale_qp` | `kl_scale_qp` | `cpu_scale_qp` (exact) | easy |
 | 6 | `kf_sharpen_coeff` | `kl_sharpen_coeff` | `cpu_sharpen_coeff` (exact) | easy |
+| 7 | `kf_sharpen` | `kl_sharpen` | `cpu_sharpen` (differs: guarded borders, no quirk) | hard (texture gap + quirk — device run required) |
+| 8 | `kf_show_sharpen_coeff` | `kl_show_sharpen_coeff` | `cpu_show_sharpen_coeff` (exact for the manual form) | medium (mirror+golden pins it; device run closes the texture gap) |
 
-Plus two file-scope tables (`g_ldither`, `g_sharpen_coeff`) and a private copy
+Plus two file-scope tables (`g_ldither`, `g_sharpen_coeff`), the
+`kf_sharpen_bilinear` helper, and a private copy
 of the `kf_norm_qscale` helper (duplicated from `kfm_deblock.cl` so the rig
 file is standalone — keep the copies in sync if you touch it).
 
-All six are **scalar** transcriptions: CUDA processes 4-wide vectors
+All eight are **scalar** transcriptions: CUDA processes 4-wide vectors
 (`uchar4`/`ushort4`) but every lane is independent, so the scalar port is
 lane-identical by construction. Your verification must still prove it.
+Kernels 7–8 additionally replace the CUDA **texture fetch** with manual
+float32 bilinear (`kf_sharpen_bilinear`, CPU-twin expression) — see §4.5/§4.6
+for why that substitution is structural-exact but rounding-inexact.
 
 ### 1.2 Explicitly OUT of scope
 
-- `kl_sharpen` / `kl_show_sharpen_coeff` (Deblock.cu): both sample the coeff
-  plane through a **CUDA texture object** — there is no faithful buffer-kernel
-  transcription; they need a sampler/image redesign plus the SharpenFilter
-  host (incl. the GaussResize unsharp clip). Not in the package; do not invent
-  them here.
+- The SharpenFilter **host** (coeff-frame allocation, `TextureObject` setup,
+  GaussResize unsharp clip, per-plane dispatch) and the KDeblock **host
+  assembly** below — you verify kernels, not filters.
 - Pad kernels `kl_padv`/`kl_padh` (live in KFMFilterBase, not Deblock.cu) —
   since ported as `kf_padv`/`kf_padh` in `kfm_filterbase.cl`, `// ALG-VERIFIED`;
   no action needed here.
@@ -77,7 +82,7 @@ cd /tmp/avs_cuda && git checkout cceb8da0e623e6bf5eea2cf655b06d4428e1600b
 
 Practical notes: `KFM/Deblock.cu` uses **CRLF** line endings and Shift-JIS
 bytes in comments — pipe through `tr -d '\r'` and read as latin-1/bytes.
-Line numbers below are 1-based at `cceb8da`. (The six kernels + both tables
+Line numbers below are 1-based at `cceb8da`. (All eight kernels + both tables
 were re-checked **semantically identical** at upstream HEAD `8e086bb`; only
 brace style drifted, so line numbers there differ but bodies do not.)
 
@@ -96,6 +101,12 @@ brace style drifted, so line numbers there differ but bodies do not.)
 | `d_sharpen_coeff[]` / `g_sharpen_coeff[]` | 1166–1173 / 1175–1182 | 30-entry LUT (device/host copies) |
 | `kl_sharpen_coeff` | 1184–1194 | device kernel |
 | `cpu_sharpen_coeff` | 1196–1205 | exact CPU twin |
+| `kl_sharpen` | 1208–1241 | device kernel (texture coeff!) |
+| `cpu_sharpen` | 1244–1312 | CPU twin (manual bilinear, guarded borders) |
+| `kl_show_sharpen_coeff` | 1315–1325 | device kernel (texture coeff!) |
+| `cpu_show_sharpen_coeff` | 1328–1347 | CPU twin (manual bilinear — exact for our form) |
+| texture setup (`SharpenFilter`) | ~1431 | Clamp/Linear/NormalizedFloat over the qp-sized uchar coeff plane |
+| `width % 8 == 0` check + `coeffvi` | ~1491–1493 | `coeffvi = qpclip dims`; taps always in bounds |
 | `kl_scale_qp` | 1838–1846 | device kernel (ShowQP filter) |
 | `cpu_scale_qp` | 1848–1856 | exact CPU twin |
 | `norm_qscale` | (find by name) | `__host__ __device__` helper, QP scale types 0–3 |
@@ -265,6 +276,81 @@ kernel void kf_sharpen_coeff(__global uchar* dst, int width, int height, int pit
 - Integer; sweep `qp` over 0–65535 with emphasis on boundaries
   (`q` = 24/25 i.e. `qp` = 199/200/207).
 
+### 4.5 `kf_sharpen` (device run required — do last, after §4.6)
+
+```c
+kernel void kf_sharpen(
+    __global PX* __restrict dst, int width, int height, int pitch,
+    __global const PX* __restrict src, int src_pitch,
+    __global const uchar* __restrict coeff, int coeff_pitch,
+    __global const PX* __restrict unsharp)
+```
+
+Device-faithful transcription of `kl_sharpen` with ONE substitution: the
+texture fetch `tex2D<float>(coeff, x/8+0.5, y/8+0.5)` is replaced by manual
+float32 bilinear (`kf_sharpen_bilinear`, the CPU twins' verbatim expression).
+Everything else follows the DEVICE kernel, including its quirks:
+
+```
+s = src[x + y*src_pitch]; l = h = s
+(l,h) = min/max of s over the 8 neighbour taps (device order, edge-clamped):
+    (max(x-1,0),        max(y-1,0)), ((x+0),          max(y-1,0)),
+    (min(x+1,HEIGHT-1), max(y-1,0)), (max(x-1,0),     (y+0)),       // <- QUIRK
+    (min(x+1,HEIGHT-1), (y+0)),      (max(x-1,0),     min(y+1,height-1)),
+    ((x+0),             min(y+1,height-1)),
+    (min(x+1,HEIGHT-1), min(y+1,height-1))                          // <- QUIRK
+c = bilinear(coeff, x/8, y/8) * (1/255)
+u = unsharp[x + y*pitch]                       // shares the DST pitch, as CUDA
+r = s + (s-u)*c + 0.5; clamp r to [l,h]; dst = (PX)(int)r   // C-truncation
+```
+
+Must-check facts:
+
+1. **The `height-1` quirk is INTENTIONAL.** Upstream `kl_sharpen` clamps the
+   right-neighbour x by `height-1`, not `width-1`. Do NOT "fix" it — the
+   transcription preserves it, and your mirror must too. It diverges from
+   `cpu_sharpen` (which guards with `x < width-1`) wherever `x+1 > height-1`.
+   Your tests MUST cover `width > height` configs (e.g. 32×8, 64×16) or you
+   will never exercise the quirk.
+2. **No `c > 0` branch.** The CPU twin skips the window when `c == 0` and the
+   device always computes it; both yield `s` there
+   (`(int)clamp(s+0.5, l, h) == s` since `l <= s <= h`). The transcription
+   follows the device (no branch). Do not add one.
+3. **Type/order fidelity:** `(s-u)` is int, converted to float for `* c`;
+   `s + …` is int+float → float; `+ 0.5f`; clamp against `(float)l/h`;
+   `(int)` truncation; then `PX` conversion. Mirror this order exactly.
+4. **Host contract** (your harness must honour it): `width % 8 == 0`
+   (enforced by the SharpenFilter ctor); `coeff` is the qp-sized uchar plane
+   (`qpw = (width+15)>>3`, i.e. a +1-block margin), so taps `ix+1`/`iy+1`
+   are always in bounds; `unsharp` shares dst geometry and pitch (it is the
+   GaussResize clip at dst size).
+5. **The texture gap (why a device run is mandatory):** CUDA filters with HW
+   fixed-point weights; the transcription uses float32 bilinear. Structurally
+   identical (Clamp never engages per §4.6-1 — same argument), but the two
+   can differ by 1 ulp at rounding boundaries, which after `(int)` truncation
+   can flip a pixel by 1. Verification = mirror+golden pin the deterministic
+   behaviour (§3) AND a rig compares `.cl` output vs real `kl_sharpen` device
+   output: expect exact match almost everywhere with rare ±1 diffs at
+   truncation boundaries; characterise, do not hand-wave.
+
+### 4.6 `kf_show_sharpen_coeff`
+
+```c
+kernel void kf_show_sharpen_coeff(
+    __global PX* __restrict dst, int width, int height, int pitch,
+    __global const uchar* __restrict coeff, int coeff_pitch)
+```
+
+- Per pixel: `dst = (PX)(int)bilinear(coeff, x/8, y/8)` — the unnormalized
+  manual bilinear, C-truncated. This is EXACTLY `cpu_show_sharpen_coeff`'s
+  expression, so a mirror+golden pair CAN pin this kernel bit-exact (§3);
+  vs the device (`(int)(normalized_tex*255)`) the texture-precision gap of
+  §4.5-5 applies, closable only by a device run.
+- Same coeff host contract as §4.5-4. PX-generic: verify 8-bit and 16-bit
+  (`(PX)(int)c` truncates then converts; `c` ∈ [0,255] so no wrap).
+- Test emphasis: fractional positions (any `x % 8 != 0`), coeff ramps
+  0→255 (exercises every truncation boundary), plus random planes.
+
 ## 5. The merge accumulator-layout reconciliation (read carefully)
 
 This is the one non-local proof in the package. Two facts:
@@ -319,6 +405,11 @@ A mechanical diff script (parse both files, compare) beats eyeballing.
 - [ ] Docs updated: `docs/KFM_PORT_SPEC.md`, `README.md`, `docs/PORT_PLAN.md`
       (and this file: mark the kernel graduated).
 - [ ] For `kf_merge_deblock` only: the §5 end-to-end layout test passes.
+- [ ] For `kf_sharpen` / `kf_show_sharpen_coeff` only: a device run compares
+      `.cl` output against real CUDA device output (§4.5-5); the ±1 truncation
+      boundary diffs are characterised and accepted. Mirror+golden alone does
+      NOT graduate these two (for `kf_show_sharpen_coeff` it pins the
+      deterministic behaviour, which is still worth doing first).
 
 When the last kernel graduates and `kfm_deblock_rig.cl` is empty: **delete the
 file** and this handoff doc's remaining-kernel sections (keep a one-line
@@ -346,14 +437,17 @@ layout, the `run_mirror` plumbing, the float32 helpers `F`/`FB`):
 
 Suggested new files (names are advisory, not mandatory):
 
-- `sim/kfm_deblock_rig_ref.cpp` — mirrors for all six (one `main` with a mode
+- `sim/kfm_deblock_rig_ref.cpp` — mirrors for all eight (one `main` with a mode
   flag, like the qp mirror's `M`/`S` modes).
-- `python/run_kfm_deblock_rig.py` — goldens + randomized cases for all six.
+- `python/run_kfm_deblock_rig.py` — goldens + randomized cases for all eight.
 
 Case-count guidance (match repo precedent: 200–680 cases per runner):
 scale_qp ≥200, sharpen_coeff ≥200, max_h/v/vh ≥200 each (radius sweep incl. 5,
 padded planes), merge ≥300 (quality/shift sweep, 8 + 16-bit, plus the §5
-end-to-end layout test on at least 20 accumulator configs).
+end-to-end layout test on at least 20 accumulator configs), show_sharpen ≥200
+(fractional positions, coeff ramps, 8 + 16-bit), sharpen ≥300 (incl. `width >
+height` quirk configs, unsharp sweeps, 8 + 16-bit) — plus the §4.5-5 device
+comparison for the sharpen pair.
 
 ---
 

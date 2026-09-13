@@ -169,11 +169,14 @@ Makefile                       # make test  (no OpenCL required)
   `python/run_kfm_deblock_qp.py` (make_qp_table + deblock_show, 200+200 cases,
   vs `sim/kfm_deblock_qp_ref.cpp`) — bit-exact. The remaining family members —
   the Bayer accumulator merge `kf_merge_deblock` (+`g_ldither`), the DC-mask
-  dilation `kf_max_vh/v/h`, the ShowQP scaler `kf_scale_qp`, and the sharpen
-  LUT `kf_sharpen_coeff` — live separately in `kfm_deblock_rig.cl` as faithful
-  `// RIG-VERIFY` transcriptions (bannered PROVISIONAL/UNVERIFIED, not covered
-  by `make test`); the mirror-pad host step and the merge accumulator-layout
-  rig proof remain open. Verification handoff spec for another agent:
+  dilation `kf_max_vh/v/h`, the ShowQP scaler `kf_scale_qp`, the sharpen LUT
+  `kf_sharpen_coeff`, and the SharpenFilter pair `kf_sharpen` /
+  `kf_show_sharpen_coeff` (manual bilinear replacing the CUDA texture fetch;
+  device-run comparison mandatory) — live separately in `kfm_deblock_rig.cl`
+  as faithful `// RIG-VERIFY` transcriptions (bannered PROVISIONAL/UNVERIFIED,
+  not covered by `make test`); all 11 Deblock.cu device kernels are now
+  transcribed, with the host sequencing and rig proofs remaining open.
+  Verification handoff spec for another agent:
   `docs/RIG_HANDOFF_KDEBLOCK.md`. Documented in `docs/KFM_PORT_SPEC.md`.
 
 ## How the port is validated (no GPU/OpenCL needed)

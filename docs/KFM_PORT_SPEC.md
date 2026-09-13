@@ -20,7 +20,7 @@ KTGMC kernels were. KDeband was chosen first (see docs/PORT_PLAN.md §5).
 | `KDeband.cu` | `KTemporalNR`, `KDeband`, `KEdgeLevel` | **KDeband core done**; **KEdgeLevel done**; **KTemporalNR done** |
 | `KFMKernel.cu` | `KPatchCombe`, `KFMSwitch`, `KFMPad`, `KFMDecimate`, `AssumeDevice` | not started |
 | `CombingAnalyze.cu` | `KFMSuper`, `KCleanSuper`, `KPreCycleAnalyze(_Show)`, `KFMSuperShow`, `KTelecine(_Super)`, `KSwitchFlag`, `KContainsCombe`, `KCombeMask`, `KRemoveCombe` | not started |
-| `Deblock.cu` | `KDeblock`, `QPClip`, `ShowQP`, `FrameType` | **KDeblock done** (`kf_deblock`, `kf_make_qp_table`, `kf_deblock_show` ALG-VERIFIED; `kf_merge_deblock`, `kf_max_vh/v/h`, `kf_scale_qp`, `kf_sharpen_coeff` in the separate provisional `kfm_deblock_rig.cl`, `// RIG-VERIFY`, handoff spec in `docs/RIG_HANDOFF_KDEBLOCK.md`; QPClip is a no-op pass-through) |
+| `Deblock.cu` | `KDeblock`, `QPClip`, `ShowQP`, `FrameType` | **all 11 device kernels transcribed** (`kf_deblock`, `kf_make_qp_table`, `kf_deblock_show` ALG-VERIFIED; `kf_merge_deblock`, `kf_max_vh/v/h`, `kf_scale_qp`, `kf_sharpen_coeff`, `kf_sharpen`, `kf_show_sharpen_coeff` in the separate provisional `kfm_deblock_rig.cl`, `// RIG-VERIFY`, handoff spec in `docs/RIG_HANDOFF_KDEBLOCK.md`; QPClip is a no-op pass-through) |
 | `DecombeUCF.cu` | `KCFieldDiff`, `KCFrameDiffDup`, `KNoiseClip`, `KAnalyzeNoise`, `KDecombUCF*` | **KNoiseClip done** (see below) |
 | `MergeStatic.cu` | `KTemporalDiff`, `KAnalyzeStatic`, `KMergeStatic` | **all 6 pipeline kernels done** (KDeband.cu-style core; KAnalyzeStatic host glue in `kfm_filterbase.cl`/`kfm_mergestatic.cl`) |
 
@@ -291,8 +291,9 @@ src/opencl/kfm/kernels/kfm_deblock.cl)
   (200+200 cases, integer-exact, float32-emulated blend) against
   `sim/kfm_deblock_qp_ref.cpp`.
 
-### `KDeblock` merge / DC-mask / ShowQP / sharpen LUT (`kf_merge_deblock`,
-`kf_max_vh/v/h`, `kf_scale_qp`, `kf_sharpen_coeff`,
+### `KDeblock` merge / DC-mask / ShowQP / sharpen (`kf_merge_deblock`,
+`kf_max_vh/v/h`, `kf_scale_qp`, `kf_sharpen_coeff`, `kf_sharpen`,
+`kf_show_sharpen_coeff`,
 src/opencl/kfm/kernels/kfm_deblock_rig.cl) — `// RIG-VERIFY` transcriptions
 
 Faithful scalar transcriptions of the remaining self-contained Deblock.cu
@@ -336,6 +337,20 @@ checklist) is `docs/RIG_HANDOFF_KDEBLOCK.md`.
 - `kf_sharpen_coeff` (twin of `kl_sharpen_coeff`/`cpu_sharpen_coeff`): QP-block
   → sharpen-strength LUT `q = qp>>3; dst = (q>=25) ? 255 : g_sharpen_coeff[q]`
   (30-entry table verbatim). Feeds the SharpenFilter, not KDeblock itself.
+- `kf_sharpen` (twin of `kl_sharpen`, SharpenFilter core): 3×3 edge-clamped
+  min/max window (transcribes the device form verbatim, including the upstream
+  `min(x+1,height-1)` quirk), `c = bilinear(coeff,x/8,y/8)/255`,
+  `dst = (int)clamp(s+(s-u)*c+0.5, l, h)` with the unsharp sharing dst pitch.
+  The CUDA texture fetch (Clamp/Linear/NormalizedFloat) is replaced by manual
+  float32 bilinear (`kf_sharpen_bilinear`, the CPU twins' verbatim
+  expression) — structurally exact (the clamp never engages: width % 8 == 0
+  plus the qp-sized coeff margin keep taps in bounds), but HW fixed-point vs
+  float32 rounding can differ at truncation boundaries, so a device-run
+  comparison is mandatory (see the handoff doc §4.5).
+- `kf_show_sharpen_coeff` (twin of `kl_show_sharpen_coeff`, the `show`
+  visualiser): `dst = (int)bilinear(coeff,x/8,y/8)` — exactly the CPU twin's
+  expression, so mirror+golden can pin it; the texture gap vs the device still
+  needs the device run to close.
 
 ## Next candidates (verifiable in this sandbox)
 
@@ -343,17 +358,16 @@ checklist) is `docs/RIG_HANDOFF_KDEBLOCK.md`.
 - `KTemporalDiff` / `KMergeStatic` host glue (they are now kernel-complete; the
   AviSynth frame-fetch / NewVideoFrame / CopyFrame seam could be recorded as the
   next concrete on-rig step).
-- Deblock remaining: `kl_sharpen` + `kl_show_sharpen_coeff` (both sample the
-  coeff plane through a CUDA texture object — need a sampler/image redesign +
-  the SharpenFilter host, incl. the GaussResize unsharp clip; note the device
-  `kl_sharpen` clamps `x+1` by `height-1`, an upstream quirk to preserve), the
-  KDeblock pad/merge host sequencing (`kf_padv`/`kf_padh` themselves are done),
-  and the rig proof of the merge accumulator-layout reconciliation (see
-  above). Upgrade path: the six `kfm_deblock_rig.cl` kernels are packaged for
-  handoff in `docs/RIG_HANDOFF_KDEBLOCK.md` — `kf_max_v/h`, `kf_scale_qp`,
-  `kf_sharpen_coeff` have exact CPU twins and `kf_merge_deblock`/`kf_max_vh`
-  are deterministic float32 / integer work, so all six are future ALG-VERIFY
-  candidates under the mirror+golden method.
+- Deblock remaining: the SharpenFilter host (coeff-frame allocation,
+  GaussResize unsharp clip, per-plane dispatch), the KDeblock pad/merge host
+  sequencing (`kf_padv`/`kf_padh` themselves are done), and the rig proofs
+  (merge accumulator-layout reconciliation + the sharpen-pair texture-gap
+  device comparison — see above and the handoff doc). With `kf_sharpen` /
+  `kf_show_sharpen_coeff` transcribed, all 11 Deblock.cu device kernels now
+  exist as OpenCL. Upgrade path: the eight `kfm_deblock_rig.cl` kernels are
+  packaged for handoff in `docs/RIG_HANDOFF_KDEBLOCK.md` — six are future
+  ALG-VERIFY candidates under the mirror+golden method, while the sharpen
+  pair additionally mandates a device run.
 - Remaining KFM families: CombingAnalyze.cu (KFMSuper/…; super-frame motion
   state) and the rest of DecombeUCF.cu (KDecombUCF* — heavy multi-clip host
   pipelines). KFMKernel.cu and Deblock QPClip are pure host/props filters with

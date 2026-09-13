@@ -19,7 +19,7 @@ buffers and dispatches them, with a scalar CPU reference used for validation.
 |---|---|---|
 | **KTGMC** | QTGMC-style deinterlacer (motion compensated) | In progress — **Milestone 1 done** (see below) |
 | KNNEDI3 | NNEDI3 neural-net upscaler | not started (next candidate) |
-| KFM | filter family (KDeband, Deblock, CombingAnalyze, …) | **KDeband/KEdgeLevel/KTemporalNR + MergeStatic/KAnalyzeStatic/KNoiseClip + KDeblock done** (core/qp-table/show ALG-VERIFIED; merge/max/scale/sharpen transcribed `// RIG-VERIFY`) (`src/opencl/kfm/kernels/`) |
+| KFM | filter family (KDeband, Deblock, CombingAnalyze, …) | **KDeband/KEdgeLevel/KTemporalNR + MergeStatic/KAnalyzeStatic/KNoiseClip + KDeblock done** (core/qp-table/show ALG-VERIFIED; merge/max/scale/sharpen in provisional `kfm_deblock_rig.cl`, `// RIG-VERIFY`) (`src/opencl/kfm/kernels/`) |
 | AvsCUDA / GRunT / masktools | CUDA-aware dispatch + helpers | out of scope unless requested |
 
 A faithful KTGMC port is large: `KTGMC/Kernel.cu` (~3,560 lines) + `MVKernel.cu`
@@ -74,8 +74,9 @@ docs/HOST_CONTRACT.md          # on-rig OpenCL host runner spec (builds, grids, 
 docs/BLOCKSEARCH_MODEL.md      # KTGMC block-search host model (SearchBatch, super-frame, CPU_EMU)
 docs/CODEX_HANDOFF.md          # step-by-step recipe for the rig-bound MV remainder
 docs/KFM_PORT_SPEC.md          # KFM filter-family map + verified/next status
+docs/RIG_HANDOFF_KDEBLOCK.md   # verification handoff spec for the provisional KDeblock kernels
 src/opencl/ktgmc/kernels/      # OpenCL kernel sources: KTGMC motion/simple
-src/opencl/kfm/kernels/        # OpenCL kernel sources: KFM (deband/edgelevel/temporalnr/mergestatic/filterbase/noiseclip/deblock .cl)
+src/opencl/kfm/kernels/        # OpenCL kernel sources: KFM (deband/edgelevel/temporalnr/mergestatic/filterbase/noiseclip/deblock/deblock_rig .cl)
 sim/ktgmc_cpu_ref.cpp          # scalar CPU mirror of the kernels (validates logic)
 python/run_validation.py       # independent Python golden + cross-check harness
 Makefile                       # make test  (no OpenCL required)
@@ -164,13 +165,14 @@ Makefile                       # make test  (no OpenCL required)
   **ALG-VERIFIED** via `python/run_kfm_deblock.py` (300 cases, core, vs
   `sim/kfm_deblock_ref.cpp` + float32-exact golden) and
   `python/run_kfm_deblock_qp.py` (make_qp_table + deblock_show, 200+200 cases,
-  vs `sim/kfm_deblock_qp_ref.cpp`) — bit-exact. The same file also carries
-  faithful `// RIG-VERIFY` transcriptions (not covered by `make test`) of the
-  Bayer accumulator merge `kf_merge_deblock` (+`g_ldither`), the DC-mask
+  vs `sim/kfm_deblock_qp_ref.cpp`) — bit-exact. The remaining family members —
+  the Bayer accumulator merge `kf_merge_deblock` (+`g_ldither`), the DC-mask
   dilation `kf_max_vh/v/h`, the ShowQP scaler `kf_scale_qp`, and the sharpen
-  LUT `kf_sharpen_coeff`; the mirror-pad host step and the merge
-  accumulator-layout rig proof remain open. Documented in
-  `docs/KFM_PORT_SPEC.md`.
+  LUT `kf_sharpen_coeff` — live separately in `kfm_deblock_rig.cl` as faithful
+  `// RIG-VERIFY` transcriptions (bannered PROVISIONAL/UNVERIFIED, not covered
+  by `make test`); the mirror-pad host step and the merge accumulator-layout
+  rig proof remain open. Verification handoff spec for another agent:
+  `docs/RIG_HANDOFF_KDEBLOCK.md`. Documented in `docs/KFM_PORT_SPEC.md`.
 
 ## How the port is validated (no GPU/OpenCL needed)
 

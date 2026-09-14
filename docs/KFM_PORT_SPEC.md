@@ -451,13 +451,14 @@ checklist) is `docs/RIG_HANDOFF_KDEBLOCK.md`.
   expression, so mirror+golden can pin it; the texture gap vs the device still
   needs the device run to close.
 
-### `CombingAnalyze.cu` batch 1 (KSwitchFlag/KCombeMask/KRemoveCombe/
-KCleanSuper/KContainsCombe stages, src/opencl/kfm/kernels/kfm_combinganalyze.cl)
+### `CombingAnalyze.cu` (complete — all 15 device kernels,
+src/opencl/kfm/kernels/kfm_combinganalyze.cl)
 
-Eleven kernels plus the two 8-tap helpers shared with the block analyzer, all
-`// ALG-VERIFIED` via `python/run_kfm_combinganalyze.py` (2276 cases) against
-the CPU mirror `sim/kfm_combinganalyze_ref.cpp` and an independent Python
-golden. Every kernel has an exact `cpu_*` twin upstream.
+Fifteen kernels (KSwitchFlag/KCombeMask/KRemoveCombe/KCleanSuper/KContainsCombe
+stages, the KFMSuper block analyzer, the FMCount census) plus the two 8-tap
+helpers, all `// ALG-VERIFIED` via `python/run_kfm_combinganalyze.py`
+(2731 cases) against the CPU mirror `sim/kfm_combinganalyze_ref.cpp` and an
+independent Python golden. Every kernel has an exact `cpu_*` twin upstream.
 
 - `kf_calc_combe8` / `kf_calc_diff8` — the `__host__ __device__` 8-tap helpers
   (`calc_combe`/`calc_diff`): combe = diffT-diffE-diffO over 7+4+4 absdiffs
@@ -487,14 +488,31 @@ golden. Every kernel has an exact `cpu_*` twin upstream.
 - `kf_init_contains_durty_block` / `kf_contains_durty_block` — OR-scan of the
   flag plane into one int (the scan's `*work = 1` is an idempotent race).
 
-Still in CombingAnalyze.cu (batch 2): the KFMSuper block analyzer
-`kl_analyze_frame` (uchar2, parity-templated, warp-reduce over 8 taps — a
-serial per-cell transcription is value-identical for integer sums), the
-FMCount reduction pair `kl_count_cmflags` / `kl_count_cmflags_2planes`
-(block-reduce + global atomics into `FMCount[2]` at `i ^ !parity`; the CPU
-calls the single-plane twin 3x, so 2planes == 2x single is the composed
-proof) plus `kl_init_fmcount` (`<<<1,2>>>` zero-fill), and the host-only
-filter classes around them.
+- `kf_super_analyze` — the KFMSuper block analyzer (`kl_analyze_frame` /
+  `cpu_analyze_frame`; uchar2 flags, parity as an int arg, 8/16-bit pixels):
+  per 4x4-stride cell, 8 taps accumulate top/bottom combe + top/bottom field
+  diffs (TFF/BFF tap routing), written as clamp(sum>>shift) at col bx+1, rows
+  2*(by+1)+{0,1}. The serial per-cell loop replaces the warp reduction
+  (integer sums are order-exact — it is the cpu twin); border cells write
+  nothing (flag col 0 / rows 0-1 stay sentinel-pinned; their content is a
+  host-seam detail, as upstream). Interlaced/split/constant crafts pin the
+  combe path, the 255 clamp, and the all-zero path.
+- `kf_init_fmcount` — `<<<1,2>>>` zero-fill of the two `FMCount` slots
+  (`{move, shima, lshima}` split into 3 arrays of 2).
+- `kf_count_cmflags` / `kf_count_cmflags_2planes` — the FMCount threshold
+  census (block-reduce + global atomics into slot `i ^ !parity`; 2planes
+  fuses U+V with per-item counts 0..2). Faithful structure: per-item 0/1
+  counts, work-group tree reduction over fixed 512-item (32x16) groups in
+  `__local` memory, one atomic per group per field (skipped at 0). Verified
+  serially (order-exact for ints, onto zero and nonzero inits, with `>=`
+  boundary pins); the 2planes golden runs two single-plane passes, proving
+  fused == U+V composition (upstream's CPU path calls the single twin 3x).
+
+With these, every `__global__` kernel in CombingAnalyze.cu is ported — only
+the host-only filter classes (KFMSuper/KPreCycleAnalyze/KSwitchFlag/
+KCombeMask/KContainsCombe/KRemoveCombe/KCleanSuper dispatch, AviSynth glue)
+remain, plus the noted RIG-VERIFY seams (flag-interior offsets, halo/pad
+layouts, the 1/3-fold constant, unwritten flag borders).
 
 ## Next candidates (verifiable in this sandbox)
 
@@ -512,9 +530,8 @@ filter classes around them.
   packaged for handoff in `docs/RIG_HANDOFF_KDEBLOCK.md` — six are future
   ALG-VERIFY candidates under the mirror+golden method, while the sharpen
   pair additionally mandates a device run.
-- Remaining KFM families: CombingAnalyze.cu batch 2 (KFMSuper block analyzer
-  + FMCount reduction pair — see above) and the rest of DecombeUCF.cu
-  (KDecombUCF* — heavy multi-clip host pipelines). Deblock QPClip is a pure
+- Remaining KFM families: the rest of DecombeUCF.cu (KDecombUCF* — heavy
+  multi-clip host pipelines; KNoiseClip is done). Deblock QPClip is a pure
   host/props filter with no device kernel
   (FrameType is CPU-only); ShowQP's kernel `kl_scale_qp` is transcribed
   (`kf_scale_qp`, `// RIG-VERIFY`), its frame-assembly is host.

@@ -46,6 +46,23 @@
  *                      -> output single int
  *     A diff8        : A L00 L10 L01 L11 L02 L12 L03 L13 (8 taps)
  *                      -> output single int
+ *     J super_analyze: J nBlkX nBlkY fpitch_f fpitch shift parity  nF nFl
+ *                      f0(nF) f1(nF); f dims 4*nBlk (nF = fpitch_f*4*nBlkY);
+ *                      flag bufs nFl = fpitch*2*nBlkY, split .x/.y; cells
+ *                      with bx==nBlkX-1 or by==nBlkY-1 write nothing.
+ *                      -> output flag_x buf then flag_y buf (-1 unwritten)
+ *     W count        : W width height pitch parity thM thS thLS
+ *                      m0 s0 l0 m1 s1 l1 (init FMCount[2])  nP
+ *                      c0x(nP) c0y(nP) c1x(nP) c1y(nP); serial accumulate
+ *                      (== block-reduce + atomics, ints are order-exact).
+ *                      -> output 6 ints (slot0 move/shima/lshima, slot1)
+ *     Q count_2planes: Q width height pitch parity thM thS thLS
+ *                      m0 s0 l0 m1 s1 l1  nP  U c0x c0y c1x c1y V c0x c0y
+ *                      c1x c1y (8 planes); fused U+V loop (the golden runs
+ *                      two single-plane passes instead — see the runner).
+ *                      -> output 6 ints
+ *     I init_fmcount : I (no payload; zero-fill check)
+ *                      -> output 6 zeros
  */
 #include <cstdio>
 #include <cstdlib>
@@ -189,6 +206,119 @@ int main(int argc,char**argv){
         int L[8]; for(int i=0;i<8;i++)L[i]=rd();
         out.push_back(AbsDiff(L[0],L[1])+AbsDiff(L[2],L[3])
             +AbsDiff(L[4],L[5])+AbsDiff(L[6],L[7]));
+    } else if(m=='J'){
+        int nBlkX=rd(),nBlkY=rd(),fpitch_f=rd(),fpitch=rd();
+        int shift=rd(),parity=rd(),nF=rd(),nFl=rd();
+        vector<int> f0=read(nF),f1=read(nF);
+        vector<int> fx((size_t)nFl,-1),fy((size_t)nFl,-1);
+        for(int by=0;by<nBlkY-1;by++)for(int bx=0;bx<nBlkX-1;bx++){
+            int x0=bx*4,y0=by*4;
+            int sum[4]={0,0,0,0};
+            for(int tx=0;tx<8;tx++){
+                int x=x0+tx;
+                int r0[8],r1[8];
+                for(int k=0;k<8;k++){
+                    r0[k]=f0[x+(y0+k)*fpitch_f];
+                    r1[k]=f1[x+(y0+k)*fpitch_f];
+                }
+                int d8=AbsDiff(r0[0],r0[7]);
+                int dT=AbsDiff(r0[0],r0[1])+AbsDiff(r0[1],r0[2])
+                    +AbsDiff(r0[2],r0[3])+AbsDiff(r0[3],r0[4])
+                    +AbsDiff(r0[4],r0[5])+AbsDiff(r0[5],r0[6])
+                    +AbsDiff(r0[6],r0[7])-d8;
+                int dE=AbsDiff(r0[0],r0[2])+AbsDiff(r0[2],r0[4])
+                    +AbsDiff(r0[4],r0[6])+AbsDiff(r0[6],r0[7])-d8;
+                int dO=AbsDiff(r0[0],r0[1])+AbsDiff(r0[1],r0[3])
+                    +AbsDiff(r0[3],r0[5])+AbsDiff(r0[5],r0[7])-d8;
+                int c0=dT-dE-dO; // combe over f0
+                if(parity){ // TFF: top=f0-combe, bottom=f1/f0-mixed
+                    int e8=AbsDiff(r1[0],r0[7]);
+                    int eT=AbsDiff(r1[0],r0[1])+AbsDiff(r0[1],r1[2])
+                        +AbsDiff(r1[2],r0[3])+AbsDiff(r0[3],r1[4])
+                        +AbsDiff(r1[4],r0[5])+AbsDiff(r0[5],r1[6])
+                        +AbsDiff(r1[6],r0[7])-e8;
+                    int eE=AbsDiff(r1[0],r1[2])+AbsDiff(r1[2],r1[4])
+                        +AbsDiff(r1[4],r1[6])+AbsDiff(r1[6],r0[7])-e8;
+                    int eO=AbsDiff(r1[0],r0[1])+AbsDiff(r0[1],r0[3])
+                        +AbsDiff(r0[3],r0[5])+AbsDiff(r0[5],r0[7])-e8;
+                    sum[0]+=c0; sum[2]+=eT-eE-eO;
+                } else { // BFF: mirrored
+                    int e8=AbsDiff(r0[0],r1[7]);
+                    int eT=AbsDiff(r0[0],r1[1])+AbsDiff(r1[1],r0[2])
+                        +AbsDiff(r0[2],r1[3])+AbsDiff(r1[3],r0[4])
+                        +AbsDiff(r0[4],r1[5])+AbsDiff(r1[5],r0[6])
+                        +AbsDiff(r0[6],r1[7])-e8;
+                    int eE=AbsDiff(r0[0],r0[2])+AbsDiff(r0[2],r0[4])
+                        +AbsDiff(r0[4],r0[6])+AbsDiff(r0[6],r1[7])-e8;
+                    int eO=AbsDiff(r0[0],r1[1])+AbsDiff(r1[1],r1[3])
+                        +AbsDiff(r1[3],r1[5])+AbsDiff(r1[5],r1[7])-e8;
+                    sum[2]+=c0; sum[0]+=eT-eE-eO;
+                }
+                sum[1]+=AbsDiff(r0[0],r1[0])+AbsDiff(r0[2],r1[2])
+                    +AbsDiff(r0[4],r1[4])+AbsDiff(r0[6],r1[6]);
+                sum[3]+=AbsDiff(r0[1],r1[1])+AbsDiff(r0[3],r1[3])
+                    +AbsDiff(r0[5],r1[5])+AbsDiff(r0[7],r1[7]);
+            }
+            int c=bx+1,r0=2*(by+1)+0,r1=2*(by+1)+1;
+            int v0=sum[0]>>shift,v1=sum[1]>>shift;
+            int v2=sum[2]>>shift,v3=sum[3]>>shift;
+            fx[(size_t)c+r0*fpitch]=(v0<0)?0:((v0>255)?255:v0);
+            fy[(size_t)c+r0*fpitch]=(v1<0)?0:((v1>255)?255:v1);
+            fx[(size_t)c+r1*fpitch]=(v2<0)?0:((v2>255)?255:v2);
+            fy[(size_t)c+r1*fpitch]=(v3<0)?0:((v3>255)?255:v3);
+        }
+        out.reserve(fx.size()+fy.size());
+        out.insert(out.end(),fx.begin(),fx.end());
+        out.insert(out.end(),fy.begin(),fy.end());
+    } else if(m=='W'){
+        int width=rd(),height=rd(),pitch=rd(),parity=rd();
+        int thM=rd(),thS=rd(),thLS=rd();
+        int m0=rd(),s0=rd(),l0=rd(),m1=rd(),s1=rd(),l1=rd(),nP=rd();
+        vector<int> c0x=read(nP),c0y=read(nP),c1x=read(nP),c1y=read(nP);
+        int dstM[2]={m0,m1},dstS[2]={s0,s1},dstL[2]={l0,l1};
+        int np=parity?0:1; // !parity
+        for(int by=0;by<height;by++)for(int bx=0;bx<width;bx++){
+            int off=bx+by*pitch;
+            for(int i=0;i<2;i++){
+                int vx=(i==0)?c0x[off]:c1x[off];
+                int vy=(i==0)?c0y[off]:c1y[off];
+                int slot=i^np;
+                if(vy>=thM)dstM[slot]++;
+                if(vx>=thS)dstS[slot]++;
+                if(vx>=thLS)dstL[slot]++;
+            }
+        }
+        out.push_back(dstM[0]);out.push_back(dstS[0]);out.push_back(dstL[0]);
+        out.push_back(dstM[1]);out.push_back(dstS[1]);out.push_back(dstL[1]);
+    } else if(m=='Q'){
+        int width=rd(),height=rd(),pitch=rd(),parity=rd();
+        int thM=rd(),thS=rd(),thLS=rd();
+        int m0=rd(),s0=rd(),l0=rd(),m1=rd(),s1=rd(),l1=rd(),nP=rd();
+        vector<int> c0Ux=read(nP),c0Uy=read(nP),c1Ux=read(nP),c1Uy=read(nP);
+        vector<int> c0Vx=read(nP),c0Vy=read(nP),c1Vx=read(nP),c1Vy=read(nP);
+        int dstM[2]={m0,m1},dstS[2]={s0,s1},dstL[2]={l0,l1};
+        int np=parity?0:1;
+        for(int by=0;by<height;by++)for(int bx=0;bx<width;bx++){
+            int off=bx+by*pitch;
+            for(int i=0;i<2;i++){
+                int slot=i^np;
+                int vx=(i==0)?c0Ux[off]:c1Ux[off];
+                int vy=(i==0)?c0Uy[off]:c1Uy[off];
+                if(vy>=thM)dstM[slot]++;
+                if(vx>=thS)dstS[slot]++;
+                if(vx>=thLS)dstL[slot]++;
+                vx=(i==0)?c0Vx[off]:c1Vx[off];
+                vy=(i==0)?c0Vy[off]:c1Vy[off];
+                if(vy>=thM)dstM[slot]++;
+                if(vx>=thS)dstS[slot]++;
+                if(vx>=thLS)dstL[slot]++;
+            }
+        }
+        out.push_back(dstM[0]);out.push_back(dstS[0]);out.push_back(dstL[0]);
+        out.push_back(dstM[1]);out.push_back(dstS[1]);out.push_back(dstL[1]);
+    } else if(m=='I'){
+        out.push_back(0);out.push_back(0);out.push_back(0);
+        out.push_back(0);out.push_back(0);out.push_back(0);
     } else { fprintf(stderr,"bad mode %c\n",m); return 2; }
     FILE* o=fopen(argv[2],"w");
     for(int v:out)fprintf(o,"%d\n",v);

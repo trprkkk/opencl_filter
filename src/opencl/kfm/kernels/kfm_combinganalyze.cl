@@ -1,11 +1,14 @@
 /* ============================================================================
  * kfm_combinganalyze.cl — OpenCL port of the CombingAnalyze.cu kernels (KFM,
  * MIT): the KSwitchFlag/KCombeMask/KRemoveCombe/KCleanSuper/KContainsCombe
- * stages (per-pixel uint8 ops + the uchar2 super-frame helpers).  The
- * KFMSuper block analyzer (kl_analyze_frame, warp-reduce) and the FMCount
- * reduction pair (kl_count_cmflags(_2planes)) live here too once ported; the
- * 8-tap calc_combe/calc_diff helpers they share are the static functions
- * below (transcribed verbatim, tap-level verified).
+ * stages (per-pixel uint8 ops + the uchar2 super-frame helpers), the KFMSuper
+ * block analyzer (kf_super_analyze — serial per-cell transcription of the
+ * warp-reduce kl_analyze_frame, value-identical for integer sums), and the
+ * FMCount reduction pair (kf_init_fmcount / kf_count_cmflags /
+ * kf_count_cmflags_2planes — work-group reduce + global atomics).  All 15
+ * CombingAnalyze.cu device kernels are ported; the 8-tap calc_combe/calc_diff
+ * helpers are the static functions below (transcribed verbatim, tap-level
+ * verified).
  *
  * Status: // ALG-VERIFIED (python/run_kfm_combinganalyze.py) vs
  *   sim/kfm_combinganalyze_ref.cpp — every kernel has an exact cpu_* twin
@@ -35,6 +38,14 @@
  *    lane touches only its own index.  sum_box3x3 ping-pongs through a tmp
  *    frame (never in-place).  contains_durty_block's *work = 1 is an
  *    idempotent race (all writers store 1).
+ *  - super_analyze leaves flag col 0 and rows 0-1 untouched (border cells
+ *    write nothing — verified sentinel-pinned); their content is a host-seam
+ *    detail, as upstream.  The serial per-cell loop replaces the warp
+ *    reduction (integer sums are order-exact).
+ *  - count_cmflags(_2planes) requires 32x16 work-groups (fixed 512-tree in
+ *    __local memory, as upstream's FM_COUNT block); atomics accumulate into
+ *    FMCount[2] at slot (i ^ !parity) — order-exact for ints.  The fused
+ *    2planes form provably equals two single-plane passes (mode Q).
  * ==========================================================================*/
 
 #ifndef PX
@@ -326,5 +337,238 @@ kernel void kf_contains_durty_block(
         if (flagp[x + y * pitch]) {
             work[0] = 1;
         }
+    }
+}
+
+/* Clamp to uchar range (std::clamp(v,0,255) upstream). */
+static int kf_clamp_u8(int v)
+{
+    if (v < 0) v = 0; else if (v > 255) v = 255;
+    return v;
+}
+
+/* ---------------------------------------------------------------------------
+ * kf_super_analyze — KFMSuper block analyzer (kl_analyze_frame /
+ * cpu_analyze_frame twin, CombingAnalyze.cu; uchar2 flags, parity-templated
+ * upstream — parity is an int arg here; uint8/uint16 pixels).  Per 4x4-stride
+ * block cell (bx,by), the 8 taps x = bx*4+tx accumulate 4 sums: top/bottom
+ * combe (TFF: combe over f0's 8 rows for top, f1/f0-interleaved for bottom;
+ * BFF mirrored) plus top/bottom field diffs; cell (bx,by) writes flag rows
+ * 2*(by+1)+{0,1} at col bx+1 as clamp(sum>>shift).  Cells with bx==nBlkX-1 or
+ * by==nBlkY-1 write nothing (flag col 0 and rows 0-1 stay untouched, as
+ * upstream — their content is a host-seam detail), and shift = BPC-8+4
+ * upstream (4/12; any int works).  CUDA spreads the 8 tx lanes over a warp
+ * and reduces; integer sums are order-exact, so the serial per-cell loop
+ * here is value-identical (it is the cpu twin).  The uchar2 flag plane is
+ * split into .x/.y uchar buffers (same element pitch).  Grid: 2D over
+ * (nBlkX-1, nBlkY-1) — the guard also tolerates larger launches.
+ * // ALG-VERIFIED (integer)
+ * -------------------------------------------------------------------------*/
+kernel void kf_super_analyze(
+    __global       uchar* __restrict flag_x,
+    __global       uchar* __restrict flag_y, int fpitch,
+    __global const PX* __restrict f0,
+    __global const PX* __restrict f1, int pitch,
+    int nBlkX, int nBlkY, int shift, int parity)
+{
+    int bx = (int)get_global_id(0);
+    int by = (int)get_global_id(1);
+    if (bx < nBlkX - 1 && by < nBlkY - 1) {
+        int x0 = bx * 4; /* DC_OVERLAP */
+        int y0 = by * 4;
+        int sum0 = 0, sum1 = 0, sum2 = 0, sum3 = 0;
+        for (int tx = 0; tx < 8; ++tx) { /* DC_BLOCK_SIZE, serial warp */
+            int x = x0 + tx;
+            int f0r0 = (int)f0[x + (y0 + 0) * pitch];
+            int f0r1 = (int)f0[x + (y0 + 1) * pitch];
+            int f0r2 = (int)f0[x + (y0 + 2) * pitch];
+            int f0r3 = (int)f0[x + (y0 + 3) * pitch];
+            int f0r4 = (int)f0[x + (y0 + 4) * pitch];
+            int f0r5 = (int)f0[x + (y0 + 5) * pitch];
+            int f0r6 = (int)f0[x + (y0 + 6) * pitch];
+            int f0r7 = (int)f0[x + (y0 + 7) * pitch];
+            int f1r0 = (int)f1[x + (y0 + 0) * pitch];
+            int f1r1 = (int)f1[x + (y0 + 1) * pitch];
+            int f1r2 = (int)f1[x + (y0 + 2) * pitch];
+            int f1r3 = (int)f1[x + (y0 + 3) * pitch];
+            int f1r4 = (int)f1[x + (y0 + 4) * pitch];
+            int f1r5 = (int)f1[x + (y0 + 5) * pitch];
+            int f1r6 = (int)f1[x + (y0 + 6) * pitch];
+            int f1r7 = (int)f1[x + (y0 + 7) * pitch];
+            int t0, t2;
+            if (parity) { /* TFF */
+                t0 = kf_calc_combe8(f0r0, f0r1, f0r2, f0r3,
+                                    f0r4, f0r5, f0r6, f0r7);
+                t2 = kf_calc_combe8(f1r0, f0r1, f1r2, f0r3,
+                                    f1r4, f0r5, f1r6, f0r7);
+            } else { /* BFF */
+                t2 = kf_calc_combe8(f0r0, f0r1, f0r2, f0r3,
+                                    f0r4, f0r5, f0r6, f0r7);
+                t0 = kf_calc_combe8(f0r0, f1r1, f0r2, f1r3,
+                                    f0r4, f1r5, f0r6, f1r7);
+            }
+            int t1 = kf_calc_diff8(f0r0, f1r0, f0r2, f1r2,
+                                   f0r4, f1r4, f0r6, f1r6);
+            int t3 = kf_calc_diff8(f0r1, f1r1, f0r3, f1r3,
+                                   f0r5, f1r5, f0r7, f1r7);
+            sum0 += t0; sum1 += t1; sum2 += t2; sum3 += t3;
+        }
+        int c = bx + 1;
+        int r0 = 2 * (by + 1) + 0;
+        int r1 = 2 * (by + 1) + 1;
+        flag_x[c + r0 * fpitch] = (uchar)kf_clamp_u8(sum0 >> shift);
+        flag_y[c + r0 * fpitch] = (uchar)kf_clamp_u8(sum1 >> shift);
+        flag_x[c + r1 * fpitch] = (uchar)kf_clamp_u8(sum2 >> shift);
+        flag_y[c + r1 * fpitch] = (uchar)kf_clamp_u8(sum3 >> shift);
+    }
+}
+
+/* FMCount block geometry (FM_COUNT_TH_W/H upstream — fixed 32x16 groups). */
+#define KCA_FM_TH_W 32
+#define KCA_FM_TH_H 16
+#define KCA_FM_THREADS 512
+
+/* ---------------------------------------------------------------------------
+ * kf_init_fmcount — zero the two FMCount slots (kl_init_fmcount twin;
+ * FMCount = {move, shima, lshima} ints, split into 3 arrays of 2).
+ * Launched with 2 work-items, as <<<1,2>>> upstream.  // ALG-VERIFIED
+ * -------------------------------------------------------------------------*/
+kernel void kf_init_fmcount(
+    __global int* __restrict dst_move,
+    __global int* __restrict dst_shima,
+    __global int* __restrict dst_lshima)
+{
+    int tx = (int)get_global_id(0);
+    if (tx < 2) {
+        dst_move[tx] = 0;
+        dst_shima[tx] = 0;
+        dst_lshima[tx] = 0;
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * kf_count_cmflags — FMCount threshold census (kl_count_cmflags /
+ * cpu_count_cmflags twin).  Per pixel, for i in {0,1}: (combe_i.y >= thM,
+ * combe_i.x >= thS, combe_i.x >= thLS) accumulate into slot (i ^ !parity) —
+ * combe0 counts land in slot !parity, combe1 in slot parity.  Structure is
+ * faithful: per-item 0/1 counts, work-group tree reduction over the fixed
+ * 512-item (32x16) group in __local memory, then ONE global atomic per group
+ * per field (skipped when the group sum is 0, as upstream).  Launch
+ * contract: work-group size exactly 32x16; the NDRange may over-cover (OOB
+ * items contribute 0 via the width/height guard).  Integer sums are
+ * order-exact, so any reduction tree shape and any atomic order give
+ * bit-identical totals.  Grid: 2D ceil(width/32)*32 x ceil(height/16)*16.
+ * // ALG-VERIFIED (integer)
+ * -------------------------------------------------------------------------*/
+kernel void kf_count_cmflags(
+    __global int* __restrict dst_move,
+    __global int* __restrict dst_shima,
+    __global int* __restrict dst_lshima,
+    __global const uchar* __restrict c0_x,
+    __global const uchar* __restrict c0_y,
+    __global const uchar* __restrict c1_x,
+    __global const uchar* __restrict c1_y, int pitch,
+    int width, int height, int parity, int thM, int thS, int thLS)
+{
+    int bx = (int)get_global_id(0);
+    int by = (int)get_global_id(1);
+    int lid = (int)get_local_id(0)
+        + (int)get_local_id(1) * (int)get_local_size(0);
+    __local int sbuf[KCA_FM_THREADS * 3];
+    for (int i = 0; i < 2; ++i) {
+        int cnt0 = 0, cnt1 = 0, cnt2 = 0;
+        if (bx < width && by < height) {
+            int off = bx + by * pitch;
+            int vx = (i == 0) ? (int)c0_x[off] : (int)c1_x[off];
+            int vy = (i == 0) ? (int)c0_y[off] : (int)c1_y[off];
+            if (vy >= thM) cnt0 = 1;
+            if (vx >= thS) cnt1 = 1;
+            if (vx >= thLS) cnt2 = 1;
+        }
+        sbuf[lid] = cnt0;
+        sbuf[lid + 512] = cnt1;
+        sbuf[lid + 1024] = cnt2;
+        barrier(CLK_LOCAL_MEM_FENCE);
+        for (int s = 256; s > 0; s >>= 1) {
+            if (lid < s) {
+                sbuf[lid] += sbuf[lid + s];
+                sbuf[lid + 512] += sbuf[lid + 512 + s];
+                sbuf[lid + 1024] += sbuf[lid + 1024 + s];
+            }
+            barrier(CLK_LOCAL_MEM_FENCE);
+        }
+        if (lid == 0) {
+            int slot = i ^ (parity ? 0 : 1); /* i ^ !parity */
+            if (sbuf[0] > 0) atomic_add(&dst_move[slot], sbuf[0]);
+            if (sbuf[512] > 0) atomic_add(&dst_shima[slot], sbuf[512]);
+            if (sbuf[1024] > 0)
+                atomic_add(&dst_lshima[slot], sbuf[1024]);
+        }
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * kf_count_cmflags_2planes — dual-plane FMCount census
+ * (kl_count_cmflags_2planes twin; U+V fused — per-item counts run 0..2).
+ * Same structure/contract as kf_count_cmflags.  Upstream's CPU path instead
+ * calls the single-plane twin twice (U then V); the fused form provably
+ * equals that composition (mode Q's golden IS the two-singles composition
+ * while the mirror runs the fused loop).  // ALG-VERIFIED (integer)
+ * -------------------------------------------------------------------------*/
+kernel void kf_count_cmflags_2planes(
+    __global int* __restrict dst_move,
+    __global int* __restrict dst_shima,
+    __global int* __restrict dst_lshima,
+    __global const uchar* __restrict c0Ux,
+    __global const uchar* __restrict c0Uy,
+    __global const uchar* __restrict c1Ux,
+    __global const uchar* __restrict c1Uy,
+    __global const uchar* __restrict c0Vx,
+    __global const uchar* __restrict c0Vy,
+    __global const uchar* __restrict c1Vx,
+    __global const uchar* __restrict c1Vy, int pitch,
+    int width, int height, int parity, int thM, int thS, int thLS)
+{
+    int bx = (int)get_global_id(0);
+    int by = (int)get_global_id(1);
+    int lid = (int)get_local_id(0)
+        + (int)get_local_id(1) * (int)get_local_size(0);
+    __local int sbuf[KCA_FM_THREADS * 3];
+    for (int i = 0; i < 2; ++i) {
+        int cnt0 = 0, cnt1 = 0, cnt2 = 0;
+        if (bx < width && by < height) {
+            int off = bx + by * pitch;
+            int vx = (i == 0) ? (int)c0Ux[off] : (int)c1Ux[off];
+            int vy = (i == 0) ? (int)c0Uy[off] : (int)c1Uy[off];
+            if (vy >= thM) cnt0++;
+            if (vx >= thS) cnt1++;
+            if (vx >= thLS) cnt2++;
+            vx = (i == 0) ? (int)c0Vx[off] : (int)c1Vx[off];
+            vy = (i == 0) ? (int)c0Vy[off] : (int)c1Vy[off];
+            if (vy >= thM) cnt0++;
+            if (vx >= thS) cnt1++;
+            if (vx >= thLS) cnt2++;
+        }
+        sbuf[lid] = cnt0;
+        sbuf[lid + 512] = cnt1;
+        sbuf[lid + 1024] = cnt2;
+        barrier(CLK_LOCAL_MEM_FENCE);
+        for (int s = 256; s > 0; s >>= 1) {
+            if (lid < s) {
+                sbuf[lid] += sbuf[lid + s];
+                sbuf[lid + 512] += sbuf[lid + 512 + s];
+                sbuf[lid + 1024] += sbuf[lid + 1024 + s];
+            }
+            barrier(CLK_LOCAL_MEM_FENCE);
+        }
+        if (lid == 0) {
+            int slot = i ^ (parity ? 0 : 1); /* i ^ !parity */
+            if (sbuf[0] > 0) atomic_add(&dst_move[slot], sbuf[0]);
+            if (sbuf[512] > 0) atomic_add(&dst_shima[slot], sbuf[512]);
+            if (sbuf[1024] > 0)
+                atomic_add(&dst_lshima[slot], sbuf[1024]);
+        }
+        barrier(CLK_LOCAL_MEM_FENCE);
     }
 }

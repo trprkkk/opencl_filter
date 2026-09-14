@@ -188,12 +188,13 @@ To get a working deinterlacer you must port the mvtools-equivalent layers:
   kernels; see `docs/KFM_PORT_SPEC.md`).
   **KNoiseClip** (`kf_noise_clip`, from DecombeUCF.cu, in `kfm_noiseclip.cl`)
   is also ALG-VERIFIED — a self-contained 8-bit filter that is
-  kernel-complete. **CombingAnalyze batch 1** (in `kfm_combinganalyze.cl`) is
-  ALG-VERIFIED too: `kf_copy_first`, `kf_combe_to_flag`, `kf_sum_box3x3`,
-  `kf_binary_flag`, `kf_bilinear_h/v`, `kf_temporal_soften`,
-  `kf_remove_combe2`, `kf_clean_super`, `kf_contains_durty_block` (+ init)
-  and the 8-tap `kf_calc_combe8`/`kf_calc_diff8` helpers — only the KFMSuper
-  block analyzer and the FMCount reduction pair remain in that file.
+  kernel-complete. **CombingAnalyze** (in `kfm_combinganalyze.cl`) is fully
+  ported (15/15 device kernels, ALG-VERIFIED): the batch-1 stages
+  (`kf_copy_first`, `kf_combe_to_flag`, `kf_sum_box3x3`, `kf_binary_flag`,
+  `kf_bilinear_h/v`, `kf_temporal_soften`, `kf_remove_combe2`,
+  `kf_clean_super`, `kf_contains_durty_block` + the 8-tap helpers) plus the
+  KFMSuper block analyzer `kf_super_analyze` and the FMCount census
+  `kf_init_fmcount`/`kf_count_cmflags`/`kf_count_cmflags_2planes`.
   The **KDeblock core** `kf_deblock` (Deblock.cu `kl_deblock`,
   in `kfm_deblock.cl`) is ALG-VERIFIED too: the fixed float32 8×8 DCT/
   hard-threshold/IDCT deblocking stage, bit-exact vs an independent float32

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Validate the CombingAnalyze.cu batch-1 kernels
+"""Validate the CombingAnalyze.cu kernels
 (kf_copy_first, kf_combe_to_flag, kf_sum_box3x3, kf_binary_flag,
 kf_bilinear_h, kf_bilinear_v, kf_temporal_soften, kf_remove_combe2,
-kf_clean_super, kf_init_contains_durty_block/kf_contains_durty_block) and the
-8-tap helpers (kf_calc_combe8/kf_calc_diff8) in
+kf_clean_super, kf_init_contains_durty_block/kf_contains_durty_block,
+kf_super_analyze, kf_init_fmcount/kf_count_cmflags/kf_count_cmflags_2planes)
+and the 8-tap helpers (kf_calc_combe8/kf_calc_diff8) in
 src/opencl/kfm/kernels/kfm_combinganalyze.cl against the CPU mirror
 sim/kfm_combinganalyze_ref.cpp with an independent Python golden.
 
@@ -14,6 +15,10 @@ float32 per operation; output depends only on the byte sum t, so the t =
 1-px halo unguarded and are verified over ALL outputs with halo-padded inputs.
 binary_flag is verified in-place (dst == srcY, as upstream).  The (1.0f/3.0f)
 constant fold is a // RIG-VERIFY item (must fold to 0x3EAAAAAB).
+kf_super_analyze transcribes the warp-reduce per cell serially (value-identical
+for integer sums); unwritten border cells stay sentinel.  The FMCount census
+verifies serially (== reduce+atomics for ints); the 2planes golden runs two
+single-plane passes, proving fused == U+V composition.
 
 Run:  python3 python/run_kfm_combinganalyze.py
 """
@@ -176,6 +181,77 @@ def golden_combe8(L):
 def golden_diff8(L):
     return [absdiff(L[0], L[1]) + absdiff(L[2], L[3]) +
             absdiff(L[4], L[5]) + absdiff(L[6], L[7])]
+
+
+def clamp_u8(v):
+    return 0 if v < 0 else (255 if v > 255 else v)
+
+
+def combe8(L):
+    diff8 = absdiff(L[0], L[7])
+    diffT = (absdiff(L[0], L[1]) + absdiff(L[1], L[2]) +
+             absdiff(L[2], L[3]) + absdiff(L[3], L[4]) +
+             absdiff(L[4], L[5]) + absdiff(L[5], L[6]) +
+             absdiff(L[6], L[7]) - diff8)
+    diffE = (absdiff(L[0], L[2]) + absdiff(L[2], L[4]) +
+             absdiff(L[4], L[6]) + absdiff(L[6], L[7]) - diff8)
+    diffO = (absdiff(L[0], L[1]) + absdiff(L[1], L[3]) +
+             absdiff(L[3], L[5]) + absdiff(L[5], L[7]) - diff8)
+    return diffT - diffE - diffO
+
+
+def golden_super(nBlkX, nBlkY, fpitch_f, fpitch, shift, parity, f0, f1):
+    nFl = fpitch * 2 * nBlkY
+    fx = [-1] * nFl   # col 0 / rows 0-1 stay sentinel (never written)
+    fy = [-1] * nFl
+    for by in range(nBlkY - 1):
+        for bx in range(nBlkX - 1):
+            x0, y0 = bx * 4, by * 4
+            sums = [0, 0, 0, 0]
+            for tx in range(8):
+                x = x0 + tx
+                r0 = [f0[x + (y0 + k) * fpitch_f] for k in range(8)]
+                r1 = [f1[x + (y0 + k) * fpitch_f] for k in range(8)]
+                c0 = combe8(r0)
+                if parity:    # TFF: top = f0-combe, bottom = f1/f0-mixed
+                    c2 = combe8([r1[0], r0[1], r1[2], r0[3],
+                                 r1[4], r0[5], r1[6], r0[7]])
+                    sums[0] += c0
+                    sums[2] += c2
+                else:         # BFF: mirrored
+                    c0m = combe8([r0[0], r1[1], r0[2], r1[3],
+                                  r0[4], r1[5], r0[6], r1[7]])
+                    sums[2] += c0
+                    sums[0] += c0m
+                sums[1] += sum(absdiff(r0[r], r1[r]) for r in (0, 2, 4, 6))
+                sums[3] += sum(absdiff(r0[r], r1[r]) for r in (1, 3, 5, 7))
+            c = bx + 1
+            r0w, r1w = 2 * (by + 1), 2 * (by + 1) + 1
+            fx[c + r0w * fpitch] = clamp_u8(sums[0] >> shift)
+            fy[c + r0w * fpitch] = clamp_u8(sums[1] >> shift)
+            fx[c + r1w * fpitch] = clamp_u8(sums[2] >> shift)
+            fy[c + r1w * fpitch] = clamp_u8(sums[3] >> shift)
+    return fx + fy
+
+
+def golden_count_single(width, height, pitch, parity, thM, thS, thLS,
+                        init, c0x, c0y, c1x, c1y):
+    dst = list(init)  # [m0,s0,l0,m1,s1,l1]
+    np_ = 0 if parity else 1   # !parity
+    for by in range(height):
+        for bx in range(width):
+            off = bx + by * pitch
+            for i in (0, 1):
+                vx = c0x[off] if i == 0 else c1x[off]
+                vy = c0y[off] if i == 0 else c1y[off]
+                slot = i ^ np_
+                if vy >= thM:
+                    dst[slot * 3 + 0] += 1
+                if vx >= thS:
+                    dst[slot * 3 + 1] += 1
+                if vx >= thLS:
+                    dst[slot * 3 + 2] += 1
+    return dst
 
 
 def main():
@@ -444,9 +520,111 @@ def main():
         if not check("calc_diff8", got, exp, (bits,)):
             if total >= 3: break
 
-    print(f"KFM CombingAnalyze batch1 (copy_first/combe_to_flag/sum_box3x3/"
+    # J: super_analyze (serial-cell == warp-reduce; border cells unwritten)
+    for _ in range(170):
+        bits = rng.choice([8, 8, 16])
+        maxv = 255 if bits == 8 else 65535
+        nBlkX = rng.randint(1, 8)   # 1 -> empty grid, all sentinel
+        nBlkY = rng.randint(1, 8)
+        fpitch_f = 4 * nBlkX + rng.choice([0, 2])
+        fpitch = nBlkX + rng.choice([0, 1, 3])
+        shift = rng.choice([0, 1, 4, 8, 12, 16])
+        parity = rng.choice([0, 1])
+        nF = fpitch_f * 4 * nBlkY
+        nFl = fpitch * 2 * nBlkY
+        pick = rng.random()
+        if pick < 0.45:
+            f0 = [rng.randint(0, maxv) for _ in range(nF)]
+            f1 = [rng.randint(0, maxv) for _ in range(nF)]
+        elif pick < 0.65:           # interlaced: combe path fires hard
+            f0 = [(maxv if r % 2 else 0)
+                  for r in range(4 * nBlkY) for _ in range(fpitch_f)]
+            f1 = [(0 if r % 2 else maxv)
+                  for r in range(4 * nBlkY) for _ in range(fpitch_f)]
+        elif pick < 0.8:            # split frames: diff top-clamp pins
+            f0 = [0] * nF
+            f1 = [maxv] * nF
+        else:                       # constant: all sums 0 -> flags 0
+            v = rng.randint(0, maxv)
+            f0 = [v] * nF
+            f1 = [v] * nF
+        hdr = [ord('J'), nBlkX, nBlkY, fpitch_f, fpitch, shift, parity,
+               nF, nFl]
+        got = run_mirror(hdr + f0 + f1)
+        exp = golden_super(nBlkX, nBlkY, fpitch_f, fpitch, shift, parity,
+                           f0, f1)
+        if not check("super_analyze", got, exp,
+                     (nBlkX, nBlkY, bits, shift, parity)):
+            if total >= 3: break
+
+    # W: count_cmflags (serial golden == reduce+atomics; nonzero init piles)
+    for _ in range(150):
+        width = rng.randint(1, 40)    # need not tile 32x16: guards cover
+        height = rng.randint(1, 40)
+        pitch = width + rng.choice([0, 1, 3])
+        nP = pitch * height
+        parity = rng.choice([0, 1])
+        thM = rng.choice([-1, 0, 1, 127, 128, 255, 256])
+        thS = rng.choice([-1, 0, 1, 127, 128, 255, 256])
+        thLS = rng.choice([-1, 0, 1, 127, 128, 255, 256])
+        if rng.random() < 0.5:
+            init = [0] * 6
+        else:
+            init = [rng.randint(0, 100000) for _ in range(6)]
+        c0x = [rng.randint(0, 255) for _ in range(nP)]
+        c0y = [rng.randint(0, 255) for _ in range(nP)]
+        c1x = [rng.randint(0, 255) for _ in range(nP)]
+        c1y = [rng.randint(0, 255) for _ in range(nP)]
+        for i in rng.sample(range(nP), min(nP, 4)):  # pin == th (fires)
+            c0y[i] = max(0, min(255, thM))
+            c1x[i] = max(0, min(255, thS))
+        hdr = [ord('W'), width, height, pitch, parity, thM, thS, thLS] + \
+            init + [nP]
+        got = run_mirror(hdr + c0x + c0y + c1x + c1y)
+        exp = golden_count_single(width, height, pitch, parity, thM, thS,
+                                  thLS, init, c0x, c0y, c1x, c1y)
+        if not check("count_cmflags", got, exp,
+                     (width, height, parity, thM, thS, thLS)):
+            if total >= 3: break
+
+    # Q: count_cmflags_2planes (fused mirror vs two-singles golden:
+    # proves fused == U+V composition)
+    for _ in range(130):
+        width = rng.randint(1, 24)
+        height = rng.randint(1, 24)
+        pitch = width + rng.choice([0, 1, 3])
+        nP = pitch * height
+        parity = rng.choice([0, 1])
+        thM = rng.choice([-1, 0, 1, 127, 128, 255, 256])
+        thS = rng.choice([-1, 0, 1, 127, 128, 255, 256])
+        thLS = rng.choice([-1, 0, 1, 127, 128, 255, 256])
+        if rng.random() < 0.5:
+            init = [0] * 6
+        else:
+            init = [rng.randint(0, 100000) for _ in range(6)]
+        planes = [[rng.randint(0, 255) for _ in range(nP)]
+                  for _ in range(8)]
+        hdr = [ord('Q'), width, height, pitch, parity, thM, thS, thLS] + \
+            init + [nP]
+        got = run_mirror(hdr + [v for pl in planes for v in pl])
+        mid = golden_count_single(width, height, pitch, parity, thM, thS,
+                                  thLS, init, *planes[0:4])
+        exp = golden_count_single(width, height, pitch, parity, thM, thS,
+                                  thLS, mid, *planes[4:8])
+        if not check("count_2planes", got, exp,
+                     (width, height, parity, thM, thS, thLS)):
+            if total >= 3: break
+
+    # I: init_fmcount (zero-fill)
+    for _ in range(5):
+        got = run_mirror([ord('I')])
+        if not check("init_fmcount", got, [0, 0, 0, 0, 0, 0], ()):
+            if total >= 3: break
+
+    print(f"KFM CombingAnalyze (copy_first/combe_to_flag/sum_box3x3/"
           f"binary_flag/bilinear_h/bilinear_v/soften/remove_combe2/"
-          f"clean_super/durty_block/combe8/diff8): "
+          f"clean_super/durty_block/combe8/diff8/super_analyze/"
+          f"count_cmflags/count_2planes/init_fmcount): "
           f"{'PASS' if ok else 'FAIL'} ({total} cases)")
     return 0 if ok else 1
 

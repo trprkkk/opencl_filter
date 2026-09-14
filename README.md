@@ -167,6 +167,15 @@ Makefile                       # make test  (no OpenCL required)
   nmin, range)` (128 == equal). Driven by one per-plane kernel, so it is
   kernel-complete (only AviSynth host glue remains). **ALG-VERIFIED** via
   `python/run_kfm_noiseclip.py` (300 cases, integer-exact, nmin/range sweeps).
+- `kfm_combinganalyze.cl`: **KFM CombingAnalyze stages** (KSwitchFlag/KCombeMask/
+  KRemoveCombe/KCleanSuper/KContainsCombe) — `kf_copy_first` (.x lane extract),
+  `kf_combe_to_flag` (2x2 quarter-mean), `kf_sum_box3x3` (quartered smooth, halo
+  contract), `kf_binary_flag` (in-place threshold OR), `kf_bilinear_h/v`
+  (separable upscale, (4,2)/(8,3)), `kf_temporal_soften` (float32 3-frame mean,
+  exhaustive t sweep), `kf_remove_combe2` (combe-gated binomial, 8/16-bit),
+  `kf_clean_super` (per-plane super cleaner), `kf_contains_durty_block`
+  (OR-scan) + the 8-tap `kf_calc_combe8`/`kf_calc_diff8` helpers.
+  **ALG-VERIFIED** via `python/run_kfm_combinganalyze.py` (2276 cases).
 - `kfm_deblock.cl`: **KFM KDeblock** — `kf_deblock` (the CUDA `kl_deblock`
   device kernel, KFM/Deblock.cu, MIT): the fixed float32 8×8 DCT →
   hard-threshold (AC coeffs only, DC untouched) → IDCT deblocking stage that

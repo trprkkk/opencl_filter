@@ -34,6 +34,7 @@ test: ref lint
 	python3 python/run_kfm_noiseclip.py
 	python3 python/run_kfm_deblock.py
 	python3 python/run_kfm_deblock_qp.py
+	python3 python/run_kfm_combinganalyze.py
 
 clean:
 	rm -rf build

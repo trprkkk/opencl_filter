@@ -451,6 +451,51 @@ checklist) is `docs/RIG_HANDOFF_KDEBLOCK.md`.
   expression, so mirror+golden can pin it; the texture gap vs the device still
   needs the device run to close.
 
+### `CombingAnalyze.cu` batch 1 (KSwitchFlag/KCombeMask/KRemoveCombe/
+KCleanSuper/KContainsCombe stages, src/opencl/kfm/kernels/kfm_combinganalyze.cl)
+
+Eleven kernels plus the two 8-tap helpers shared with the block analyzer, all
+`// ALG-VERIFIED` via `python/run_kfm_combinganalyze.py` (2276 cases) against
+the CPU mirror `sim/kfm_combinganalyze_ref.cpp` and an independent Python
+golden. Every kernel has an exact `cpu_*` twin upstream.
+
+- `kf_calc_combe8` / `kf_calc_diff8` — the `__host__ __device__` 8-tap helpers
+  (`calc_combe`/`calc_diff`): combe = diffT-diffE-diffO over 7+4+4 absdiffs
+  (smooth fields give ~0, alternating combs large positive, can go negative),
+  diff = 4 field-pair absdiffs. Tap-level verified incl. sign flips.
+- `kf_copy_first` — `.x` lane extract from super-frame vectors (`lanes` covers
+  the template stride; 2 = production uchar2, 4 = uchar4).
+- `kf_combe_to_flag` — 2x2 round-half-up quarter-mean downsample (the host
+  launches it over the flag interior, skipping row 0/col 0 — RIG-VERIFY seam).
+- `kf_sum_box3x3` — quartered 3x3 smooth, min with maxv (NOT /9 — upstream
+  always quarters); 1-px halo contract, verified over all outputs; ping-pongs
+  through a tmp frame upstream (never in-place).
+- `kf_binary_flag` — `(Y>=thY||C>=thC)?128:0`, verified in-place (dst == srcY
+  upstream; race-free by lane-locality).
+- `kf_bilinear_h/v` — separable upscale, `(s0*c0+s1*c1+HALF)>>SHIFT` with
+  HALF = SCALE/2 (SCALE/SHIFT as args; production (4,2)/(8,3)); arithmetic >>
+  for the negative top row/col; 1-col/1-row halo; always in [0,255], no clamp.
+- `kf_temporal_soften` — float32 3-frame mean, truncated toward zero; output
+  depends only on the byte sum t (all adds exact), so the t = 0..765 sweep is
+  exhaustive. The `(1.0f/3.0f)` constant fold is the only RIG-VERIFY item
+  (must fold to 0x3EAAAAAB, as every mainstream compiler does).
+- `kf_remove_combe2` — 4x4-combe-gated vertical `(a+2b+c+2)>>2` (8/16-bit);
+  VPAD-halo contract on src; combe `.x` gate with `>=` boundary pins.
+- `kf_clean_super` — per-plane super cleaner (CUDA z-splits the U/V pair; the
+  host launches per plane, as the cpu twin does): zero `.x` where prev.y <=
+  thresh && cur.y <= thresh.
+- `kf_init_contains_durty_block` / `kf_contains_durty_block` — OR-scan of the
+  flag plane into one int (the scan's `*work = 1` is an idempotent race).
+
+Still in CombingAnalyze.cu (batch 2): the KFMSuper block analyzer
+`kl_analyze_frame` (uchar2, parity-templated, warp-reduce over 8 taps — a
+serial per-cell transcription is value-identical for integer sums), the
+FMCount reduction pair `kl_count_cmflags` / `kl_count_cmflags_2planes`
+(block-reduce + global atomics into `FMCount[2]` at `i ^ !parity`; the CPU
+calls the single-plane twin 3x, so 2planes == 2x single is the composed
+proof) plus `kl_init_fmcount` (`<<<1,2>>>` zero-fill), and the host-only
+filter classes around them.
+
 ## Next candidates (verifiable in this sandbox)
 
 - `kl_copy` / `kl_fill` helpers (already covered generically by KTGMC `kt_copy`).
@@ -467,9 +512,10 @@ checklist) is `docs/RIG_HANDOFF_KDEBLOCK.md`.
   packaged for handoff in `docs/RIG_HANDOFF_KDEBLOCK.md` — six are future
   ALG-VERIFY candidates under the mirror+golden method, while the sharpen
   pair additionally mandates a device run.
-- Remaining KFM families: CombingAnalyze.cu (KFMSuper/…; super-frame motion
-  state) and the rest of DecombeUCF.cu (KDecombUCF* — heavy multi-clip host
-  pipelines). Deblock QPClip is a pure host/props filter with no device kernel
+- Remaining KFM families: CombingAnalyze.cu batch 2 (KFMSuper block analyzer
+  + FMCount reduction pair — see above) and the rest of DecombeUCF.cu
+  (KDecombUCF* — heavy multi-clip host pipelines). Deblock QPClip is a pure
+  host/props filter with no device kernel
   (FrameType is CPU-only); ShowQP's kernel `kl_scale_qp` is transcribed
   (`kf_scale_qp`, `// RIG-VERIFY`), its frame-assembly is host.
 - `KFMFilterBase.cu` is now fully ported: `kl_copy_pad`/`kl_copy_pad_2plane`

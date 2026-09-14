@@ -178,13 +178,14 @@ item (CUDA may fuse `a*b+c` into fma; <1 ulp difference).
 
 ### `KFMFilterBase` coefficient kernels (kf_calc_combe / kf_merge_uvcoefs /
 kf_extend_coef2 / kf_apply_uvcoefs_420 / kf_padv / kf_padh / kf_merge_block /
-kf_average / kf_max / kf_merge_uvflags / kf_copy_border / kf_analyze_frame,
-src/opencl/kfm/kernels/kfm_filterbase.cl)
+kf_average / kf_max / kf_merge_uvflags / kf_copy_border / kf_analyze_frame /
+kf_copy_pad / kf_copy_pad_2plane / kf_max_extend_blocks_h /
+kf_max_extend_blocks_v, src/opencl/kfm/kernels/kfm_filterbase.cl)
 
 `KFMFilterBase.cu` is the shared base class and defines the coefficient kernels
 that KAnalyzeStatic is assembled from (`cpu_*` twins exist in the same file).
-Twelve are ported here and `// ALG-VERIFIED` via `python/run_kfm_filterbase.py`
-(2000 cases) against the CPU mirror `sim/kfm_filterbase_ref.cpp` and an
+Sixteen are ported here and `// ALG-VERIFIED` via `python/run_kfm_filterbase.py`
+(2650 cases) against the CPU mirror `sim/kfm_filterbase_ref.cpp` and an
 independent Python golden. All are per-pixel/per-plane integer ops (no float),
 so the CUDA 4-wide vectorisation is equivalent to a scalar port.
 
@@ -258,6 +259,37 @@ so the CUDA 4-wide vectorisation is equivalent to a scalar port.
   border outputs are defined by the pad, so ALL height rows are verified with
   padded inputs, with crafted fields pinning the strict-`>` boundaries at
   t/diff = 0, 1, maxv and 6*maxv. 8/16-bit.
+- `kf_copy_pad` — padded-frame copy (`kl_copy_pad`; uchar4/ushort4; driven by
+  `CopyFrameAndPad` with hpad = 0; NO upstream CPU twin exists — the CPU
+  fallback is CopyFrame + PadFrame — so it is checked against the device
+  kernel's own semantics, as `kf_extend_coef2` is). Copies src into dst's
+  interior while mirror-padding hpad/vpad around it (dst at interior origin,
+  src at plane origin). The uchar4 lane-reversal quirk cancels EXACTLY
+  (reversed lanes over mirrored vector columns compose to the plain
+  per-pixel mirror — proof in the `.cl` comment), so the scalar port is the
+  plain mirror; the verification mirrors the VECTOR algorithm with the swap
+  while the golden is the plain pixel mirror, so their agreement IS the
+  empirical proof — plus a copy→padv→padh composition cross-check per case.
+  8/16-bit, mult-4 widths, hpad mult-4 (production hpad is 0: the swap never
+  even runs upstream).
+- `kf_copy_pad_2plane` — dual-plane padded copy (`kl_copy_pad_2plane`;
+  U/V pair; same per-plane semantics). CUDA spreads planes over blockIdx.z;
+  the `.cl` covers both planes per thread over a 2D grid — plane-independent
+  values, identical results (upstream keeps the two-launch form commented at
+  the call site). 8/16-bit.
+- `kf_max_extend_blocks_h` / `kf_max_extend_blocks_v` — the `ExtendBlocks`
+  ping-pong passes (`kl_max_extend_blocks_h/v`; uint8_t + uchar4
+  instantiations, both used by CombingAnalyze — no uint16 — so uchar is exact
+  parity, at any width for uint8 and mult-4 for uchar4 lanes whose max() is
+  per-lane). Out-of-place, race-free: the far edge self-copies (no neighbour
+  beyond), the near edge takes the neighbour outright (col 0 / row 0 discard
+  self), interior takes max(self, neighbour); verbatim branch order (far-edge
+  check first, so nBlk == 1 self-copies — pinned). Verified solo plus
+  composed h→v (dst→tmp→dst) against the in-place 3-pass
+  `cpu_max_extend_blocks` algorithm — the mirror runs the ping-pong while the
+  golden runs the in-place path, so their agreement proves the composition
+  equals the CPU twin (for nBlkX,nBlkY ≥ 2; at 1 the CPU twin reads out of
+  bounds, so production block counts stay ≥ 2).
 
 These, together with `kf_min_frames` and `kf_and_coefs` (in kfm_mergestatic.cl),
 make KAnalyzeStatic's kernel set complete (see the MergeStatic section for the
@@ -279,7 +311,8 @@ filters, with dispositions:
   visualisation, not a device kernel — not ported.)
 - `KFMPad` — VPAD vertical pad via `CopyFrameAndPad` (device path:
   `kl_copy_pad`/`kl_copy_pad_2plane`; CPU path: copy + `kl_padv`). Dispatch
-  is host; the pad kernels belong to the CombingAnalyze batch (see below).
+  is host; the pad kernels are ported as `kf_copy_pad`/`kf_copy_pad_2plane`
+  (see above), so KFMPad is kernel-complete too.
 - `KFMDecimate` — pure frame-index remapping from a durations file. No pixels
   touched; nothing to port.
 - `AssumeDevice` — pure cache-hint filter. Nothing to port.
@@ -439,17 +472,13 @@ checklist) is `docs/RIG_HANDOFF_KDEBLOCK.md`.
   pipelines). Deblock QPClip is a pure host/props filter with no device kernel
   (FrameType is CPU-only); ShowQP's kernel `kl_scale_qp` is transcribed
   (`kf_scale_qp`, `// RIG-VERIFY`), its frame-assembly is host.
-- Unported `KFMFilterBase.cu` kernels (the rest of the CombingAnalyze batch):
-  `kl_copy_pad`/`kl_copy_pad_2plane` (mirror-pad copy with the uchar4
-  lane-reversal quirk; also backs `KFMPad`) and `kl_max_extend_blocks_h/v` +
-  `cpu_max_extend_blocks` (`ExtendBlocks`, out-of-place h/v ping-pong vs one
-  in-place CPU twin — needs care). `kl_average`, `kl_max`,
-  `kl_merge_uvflags`, `kl_copy_border` and `kl_analyze_frame` (+ twins) are
-  ported above (`kf_average`, `kf_max`, `kf_merge_uvflags`, `kf_copy_border`,
-  `kf_analyze_frame`). `kl_copy`/`kl_fill` stay covered by KTGMC `kt_copy`
-  (memcpy-equivalent, no port planned). The uchar2 block-based
-  `kl_analyze_frame` in CombingAnalyze.cu is a different kernel and stays with
-  that file's batch.
+- `KFMFilterBase.cu` is now fully ported: `kl_copy_pad`/`kl_copy_pad_2plane`
+  (also backing `KFMPad`) and `kl_max_extend_blocks_h/v` are `kf_copy_pad` /
+  `kf_copy_pad_2plane` / `kf_max_extend_blocks_h/v` above, completing the
+  CombingAnalyze batch from this file. `kl_copy`/`kl_fill` stay covered by
+  KTGMC `kt_copy` (memcpy-equivalent, no port planned). The uchar2
+  block-based `kl_analyze_frame` in CombingAnalyze.cu is a different kernel
+  and stays with that file's batch.
 
 ## Notes / licence
 

@@ -1,10 +1,17 @@
-/* CPU mirror of the twelve KFM KFMFilterBase.cu kernels in
+/* CPU mirror of the sixteen KFM KFMFilterBase.cu kernels in
  * src/opencl/kfm/kernels/kfm_filterbase.cl.  cpu_calc_combe / cpu_merge_uvcoefs
  * / cpu_apply_uvcoefs_420 / cpu_padv / cpu_padh / cpu_merge / cpu_average /
  * cpu_max / cpu_merge_uvflags / cpu_copy_border / cpu_analyze_frame are exact
  * upstream twins; mode E replicates the CUDA kl_extend_coef2 device kernel
  * (the .cl transliteration target — the upstream CPU *fallback* branch differs
- * at rows 0 and height-1, see the .cl header).
+ * at rows 0 and height-1, see the .cl header).  Modes P/O replicate the CUDA
+ * kl_copy_pad / kl_copy_pad_2plane device kernels in VECTOR form (4-lane
+ * groups with the padx lane swap — no upstream CPU twin exists; the CPU
+ * fallback is CopyFrame+PadFrame), while the golden is the plain per-pixel
+ * mirror, so their agreement proves the swap cancels.  Modes S/T replicate
+ * the kl_max_extend_blocks_h/v device passes; mode U runs the CUDA h->v
+ * ping-pong while the golden runs the in-place cpu_max_extend_blocks
+ * algorithm, proving the composition equals the CPU twin.
  *
  * Usage: kfm_filterbase_ref <in> <out>
  *   All ints on one line.  Modes:
@@ -60,6 +67,22 @@
  *                      1); t = CalcCombe, diff = |mref-base|,
  *                      flag = SHIMA/LSHIMA/MOVE threshold fold.
  *                      -> output whole dpitch*height buffer (-1 in gaps)
+ *     P copy_pad     : P width height srcpitch dstpitch hpad vpad  nS nD
+ *                      src(nS); vector-form mirror (see above); dst points
+ *                      at the interior origin (org = hpad+vpad*dstpitch).
+ *                      -> output whole dst buffer (-1 in gaps)
+ *     O copy_pad_2plane: O width height srcpitch dstpitch hpad vpad  nS nD
+ *                      src0(nS) src1(nS); per-plane copy_pad (blockIdx.z).
+ *                      -> output dst0 buffer then dst1 buffer (-1 in gaps)
+ *     S extend_h     : S nBlkX nBlkY pitch  nP  src(nP); out-of-place h
+ *                      pass (last col self, col 0 = right, else max).
+ *                      -> output nBlkX*nBlkY
+ *     T extend_v     : T nBlkX nBlkY pitch  nP  src(nP); out-of-place v
+ *                      pass (last row self, row 0 = below, else max).
+ *                      -> output nBlkX*nBlkY
+ *     U extend_hv    : U nBlkX nBlkY pitch  nP  src(nP); h into tmp then v
+ *                      (nBlkX,nBlkY >= 2; the CPU twin is OOB at 1).
+ *                      -> output nBlkX*nBlkY
  */
 #include <cstdio>
 #include <cstdlib>
@@ -238,6 +261,104 @@ int main(int argc,char**argv){
             if(t>tLS)flag|=4;   // LSHIMA
             if(diff>tM)flag|=1; // MOVE
             out[(size_t)xx+yy*dpitch]=flag;
+        }
+    } else if(m=='P'){
+        // vector-form mirror: 4-lane groups with the padx lane swap, as CUDA
+        int width=rd(),height=rd(),srcpitch=rd(),dstpitch=rd();
+        int hpad=rd(),vpad=rd(),nS=rd(),nD=rd();
+        vector<int> src=read(nS);
+        int width4=width/4,hpad4=hpad/4;
+        int org=hpad+vpad*dstpitch; // dst interior origin
+        out.assign(nD,-1);
+        for(int vy=-vpad;vy<height+vpad;vy++){
+            int srcy=vy;
+            if(srcy<0)srcy=-srcy-1;
+            else if(srcy>=height)srcy=height-(srcy-height)-1;
+            for(int vx=-hpad4;vx<width4+hpad4;vx++){
+                int srcx=vx; bool padx=true;
+                if(srcx<0)srcx=-srcx-1;
+                else if(srcx>=width4)srcx=width4-(srcx-width4)-1;
+                else padx=false;
+                int base=4*srcx+srcy*srcpitch;
+                int v0=src[base+0],v1=src[base+1],v2=src[base+2],v3=src[base+3];
+                // swap(v.x,v.w); swap(v.y,v.z)
+                int w0=padx?v3:v0,w1=padx?v2:v1,w2=padx?v1:v2,w3=padx?v0:v3;
+                int dstbase=org+4*vx+vy*dstpitch;
+                out[dstbase+0]=w0; out[dstbase+1]=w1;
+                out[dstbase+2]=w2; out[dstbase+3]=w3;
+            }
+        }
+    } else if(m=='O'){
+        int width=rd(),height=rd(),srcpitch=rd(),dstpitch=rd();
+        int hpad=rd(),vpad=rd(),nS=rd(),nD=rd();
+        vector<int> src0=read(nS),src1=read(nS);
+        int width4=width/4,hpad4=hpad/4;
+        int org=hpad+vpad*dstpitch;
+        vector<int> out0(nD,-1),out1(nD,-1);
+        const vector<int>* srcs[2]={&src0,&src1};
+        vector<int>* outs[2]={&out0,&out1};
+        for(int pl=0;pl<2;pl++){ // blockIdx.z
+            for(int vy=-vpad;vy<height+vpad;vy++){
+                int srcy=vy;
+                if(srcy<0)srcy=-srcy-1;
+                else if(srcy>=height)srcy=height-(srcy-height)-1;
+                for(int vx=-hpad4;vx<width4+hpad4;vx++){
+                    int srcx=vx; bool padx=true;
+                    if(srcx<0)srcx=-srcx-1;
+                    else if(srcx>=width4)srcx=width4-(srcx-width4)-1;
+                    else padx=false;
+                    int base=4*srcx+srcy*srcpitch;
+                    int v0=(*srcs[pl])[base+0],v1=(*srcs[pl])[base+1];
+                    int v2=(*srcs[pl])[base+2],v3=(*srcs[pl])[base+3];
+                    int w0=padx?v3:v0,w1=padx?v2:v1;
+                    int w2=padx?v1:v2,w3=padx?v0:v3;
+                    int dstbase=org+4*vx+vy*dstpitch;
+                    (*outs[pl])[dstbase+0]=w0; (*outs[pl])[dstbase+1]=w1;
+                    (*outs[pl])[dstbase+2]=w2; (*outs[pl])[dstbase+3]=w3;
+                }
+            }
+        }
+        out.reserve(2*(size_t)nD);
+        out.insert(out.end(),out0.begin(),out0.end());
+        out.insert(out.end(),out1.begin(),out1.end());
+    } else if(m=='S'){
+        int nBlkX=rd(),nBlkY=rd(),pitch=rd(),nP=rd();
+        vector<int> src=read(nP);
+        for(int by=0;by<nBlkY;by++)for(int bx=0;bx<nBlkX;bx++){
+            int off=bx+by*pitch, v;
+            if(bx==nBlkX-1)v=src[off];
+            else if(bx==0)v=src[off+1];
+            else { int a=src[off],b=src[off+1]; v=(a>b)?a:b; }
+            out.push_back(v);
+        }
+    } else if(m=='T'){
+        int nBlkX=rd(),nBlkY=rd(),pitch=rd(),nP=rd();
+        vector<int> src=read(nP);
+        for(int by=0;by<nBlkY;by++)for(int bx=0;bx<nBlkX;bx++){
+            int off=bx+by*pitch, v;
+            if(by==nBlkY-1)v=src[off];
+            else if(by==0)v=src[off+pitch];
+            else { int a=src[off],b=src[off+pitch]; v=(a>b)?a:b; }
+            out.push_back(v);
+        }
+    } else if(m=='U'){
+        // CUDA ping-pong: h into tmp, then v into dst (the golden instead
+        // runs the in-place 3-pass cpu algorithm — see the python runner)
+        int nBlkX=rd(),nBlkY=rd(),pitch=rd(),nP=rd();
+        vector<int> src=read(nP),tmp((size_t)nP,0);
+        for(int by=0;by<nBlkY;by++)for(int bx=0;bx<nBlkX;bx++){
+            int off=bx+by*pitch, v;
+            if(bx==nBlkX-1)v=src[off];
+            else if(bx==0)v=src[off+1];
+            else { int a=src[off],b=src[off+1]; v=(a>b)?a:b; }
+            tmp[off]=v;
+        }
+        for(int by=0;by<nBlkY;by++)for(int bx=0;bx<nBlkX;bx++){
+            int off=bx+by*pitch, v;
+            if(by==nBlkY-1)v=tmp[off];
+            else if(by==0)v=tmp[off+pitch];
+            else { int a=tmp[off],b=tmp[off+pitch]; v=(a>b)?a:b; }
+            out.push_back(v);
         }
     } else { fprintf(stderr,"bad mode %c\n",m); return 2; }
     FILE* o=fopen(argv[2],"w");

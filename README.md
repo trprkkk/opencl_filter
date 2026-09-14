@@ -151,10 +151,14 @@ Makefile                       # make test  (no OpenCL required)
   (floor mean), `kf_max` (uint8 max; scalar twin, so any width),
   `kf_merge_uvflags` (in-place `fY|=((fU|fV)<<4)`, mod-256 wrap covered),
   `kf_copy_border` (extreme rows straight through) and `kf_analyze_frame`
-  (SHIMA/LSHIMA/MOVE threshold fold over padded taps, all rows verified).
-  These plus `kf_min_frames`/`kf_and_coefs` complete KAnalyzeStatic's kernel
-  set (only the VPAD-pad host assembly remains, `// RIG-VERIFY`).
-  **ALG-VERIFIED** via `python/run_kfm_filterbase.py` (2000 cases,
+  (SHIMA/LSHIMA/MOVE threshold fold over padded taps, all rows verified),
+  the padded-frame copies `kf_copy_pad`/`kf_copy_pad_2plane` (lane-swap
+  quirk proven to cancel; no upstream CPU twin) and the ExtendBlocks
+  ping-pong `kf_max_extend_blocks_h/v` (composed h->v proven equal to the
+  in-place CPU twin). These plus `kf_min_frames`/`kf_and_coefs` complete
+  KAnalyzeStatic's kernel set (only the VPAD-pad host assembly remains,
+  `// RIG-VERIFY`); `KFMFilterBase.cu` itself is now fully ported.
+  **ALG-VERIFIED** via `python/run_kfm_filterbase.py` (2650 cases,
   integer-exact).
 - `kfm_noiseclip.cl`: **KFM KNoiseClip** — `kf_noise_clip`, faithful to
   `cpu_noise_clip`/`dev_limitter` (KFM/DecombeUCF.cu, MIT). Self-contained

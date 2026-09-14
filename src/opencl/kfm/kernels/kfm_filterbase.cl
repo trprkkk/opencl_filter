@@ -22,8 +22,10 @@
  * (used by KDeblock's DeblockPlane, CombingAnalyze flag planes, ...), the
  * MergeBlock blender kf_merge_block (used by KPatchCombe/KFMSwitch), and the
  * five CombingAnalyze/CompareFields helpers kf_average, kf_max,
- * kf_merge_uvflags, kf_copy_border and kf_analyze_frame.
- * All twelve are per-pixel / per-plane integer ops whose
+ * kf_merge_uvflags, kf_copy_border and kf_analyze_frame, the padded-frame
+ * copies kf_copy_pad / kf_copy_pad_2plane, and the ExtendBlocks ping-pong
+ * pair kf_max_extend_blocks_h / kf_max_extend_blocks_v.
+ * All sixteen are per-pixel / per-plane integer ops whose
  * channels are independent, so the CUDA 4-wide vectorisation is equivalent to a
  * scalar translation (bit-identical for plane width a multiple of 4; the
  * scalar twins kf_max / kf_merge_uvflags / kf_copy_border are exact twins at
@@ -33,9 +35,12 @@
  *   // ALG-VERIFIED (python/run_kfm_filterbase.py) vs sim/kfm_filterbase_ref.cpp
  *   //   cpu_calc_combe / cpu_merge_uvcoefs / cpu_apply_uvcoefs_420 /
  *   //   cpu_padv / cpu_padh / cpu_merge / cpu_average / cpu_max /
- *   //   cpu_merge_uvflags / cpu_copy_border / cpu_analyze_frame are exact
- *   //   twins; cpu_extend_coef (below) is the CUDA kl_extend_coef2 twin that
- *   //   the .cl transliterates.
+ *   //   cpu_merge_uvflags / cpu_copy_border / cpu_analyze_frame /
+ *   //   cpu_max_extend_blocks are exact twins; cpu_extend_coef (below) is
+ *   //   the CUDA kl_extend_coef2 twin that the .cl transliterates, and
+ *   //   kf_copy_pad(_2plane) is checked against its device kernels' own
+ *   //   semantics (no CPU twin exists — the CPU fallback is CopyFrame +
+ *   //   PadFrame), while the h/v passes compose to the cpu twin (mode U).
  *
  * Fidelity / assembly notes:
  *  - calc_combe / merge_uvcoefs / apply_uvcoefs_420 have identical CUDA and CPU
@@ -428,5 +433,152 @@ kernel void kf_analyze_frame(
         if (t > threshLS) flag |= KF_LSHIMA;
         if (diff > threshM) flag |= KF_MOVE;
         dst[x + y * dstPitch] = (uchar)flag;
+    }
+}
+
+/* Mirror-pad index map: the kl_copy_pad_get_pix address math, per scalar lane.
+ * Single reflection, so callers must keep the pad within the plane
+ * (hpad <= width, vpad <= height — always true upstream: hpad is 0 and vpad
+ * is VPAD at every call site). */
+static int kf_mirror_idx(int x, int len)
+{
+    if (x < 0) return -x - 1;
+    if (x >= len) return len - (x - len) - 1;
+    return x;
+}
+
+/* ---------------------------------------------------------------------------
+ * kf_copy_pad — padded-frame copy (kl_copy_pad twin, KFMFilterBase.cu; no CPU
+ * twin exists — the CPU fallback path instead runs CopyFrame + PadFrame, i.e.
+ * a plain copy plus kf_padv — so this is checked against the device kernel's
+ * own semantics, as kf_extend_coef2 is).  Copies the src plane into the
+ * interior of dst while mirror-padding hpad columns / vpad rows around it.
+ * dst points at the interior origin (negative indices, as with kf_padv);
+ * src points at its plane origin (no pad).  Grid: 2D (width+2*hpad,
+ * height+2*vpad); x = gid0-hpad, y = gid1-vpad, guarded at the top exactly
+ * like CUDA (`x < width+hpad && y < height+vpad`; the low end is implied by
+ * gid >= 0).
+ *
+ * The uchar4 lane-reversal quirk cancels EXACTLY, so the scalar port is the
+ * plain per-pixel mirror (proof: CUDA fetches vector srcx and, when the
+ * vector column is out of range, stores its lanes reversed; dst pixel
+ * (4x+i) then reads src pixel 4*srcx+(3-i).  For x < 0, srcx = -x-1 gives
+ * 4*srcx+3-i = -(4x+i)-1 — the plain pixel mirror; for x >= width4,
+ * srcx = 2*width4-x-1 gives 8*width4-4x-i-1 = 2*W-(4x+i)-1 — again the plain
+ * mirror.  The vertical axis is untouched by the swap.  The mode-P/O
+ * verification mirrors the VECTOR algorithm with the swap while the golden
+ * is the plain pixel mirror, so their agreement is the empirical proof —
+ * plus a copy->padv->padh composition cross-check per case).  Bit-identical
+ * for plane width a multiple of 4 (vector twin) with hpad a multiple of 4
+ * (hpad4 vectors; production hpad is 0, so the swap never even runs
+ * upstream).  // ALG-VERIFIED (integer)
+ * -------------------------------------------------------------------------*/
+kernel void kf_copy_pad(
+    __global       PX* __restrict dst, int dstpitch,
+    __global const PX* __restrict src, int srcpitch,
+    int width, int height, int hpad, int vpad)
+{
+    int x = (int)get_global_id(0) - hpad;
+    int y = (int)get_global_id(1) - vpad;
+    if (x < width + hpad && y < height + vpad) {
+        int sx = kf_mirror_idx(x, width);
+        int sy = kf_mirror_idx(y, height);
+        dst[x + y * dstpitch] = src[sx + sy * srcpitch];
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * kf_copy_pad_2plane — dual-plane padded copy (kl_copy_pad_2plane twin,
+ * KFMFilterBase.cu; uchar4/ushort4; driven for U/V by CopyFrameAndPad with
+ * hpad = 0).  Same per-plane semantics as kf_copy_pad; CUDA spreads the two
+ * planes over blockIdx.z, while this launch covers both planes per thread
+ * over a 2D grid — values are plane-independent, so the grids compute
+ * identical results (upstream even keeps the equivalent two-launch form in
+ * comments at the call site).  // ALG-VERIFIED (integer)
+ * -------------------------------------------------------------------------*/
+kernel void kf_copy_pad_2plane(
+    __global       PX* __restrict dst0,
+    __global       PX* __restrict dst1, int dstpitch,
+    __global const PX* __restrict src0,
+    __global const PX* __restrict src1, int srcpitch,
+    int width, int height, int hpad, int vpad)
+{
+    int x = (int)get_global_id(0) - hpad;
+    int y = (int)get_global_id(1) - vpad;
+    if (x < width + hpad && y < height + vpad) {
+        int sx = kf_mirror_idx(x, width);
+        int sy = kf_mirror_idx(y, height);
+        int soff = sx + sy * srcpitch;
+        int doff = x + y * dstpitch;
+        dst0[doff] = src0[soff];
+        dst1[doff] = src1[soff];
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * kf_max_extend_blocks_h — ExtendBlocks horizontal pass (cpu/kl twin,
+ * KFMFilterBase.cu; uint8_t + uchar4 instantiations, both used by
+ * CombingAnalyze — no uint16 — so this uchar kernel is exact parity at any
+ * width for uint8 and at mult-4 width for uchar4 lanes, whose max() is
+ * per-lane upstream).  Out-of-place, race-free: last column self-copies (no
+ * right neighbour), column 0 takes the right neighbour (discarding self),
+ * interior takes max(self, right).  Branch order is verbatim: the
+ * last-column check comes first, so nBlkX == 1 self-copies (well-defined).
+ * Grid: 2D (nBlkX,nBlkY).  // ALG-VERIFIED (integer)
+ * -------------------------------------------------------------------------*/
+kernel void kf_max_extend_blocks_h(
+    __global       uchar* __restrict dstp,
+    __global const uchar* __restrict srcp,
+    int pitch, int nBlkX, int nBlkY)
+{
+    int bx = (int)get_global_id(0);
+    int by = (int)get_global_id(1);
+    if (bx < nBlkX && by < nBlkY) {
+        int off = bx + by * pitch;
+        int v;
+        if (bx == nBlkX - 1) {
+            v = (int)srcp[off];
+        } else if (bx == 0) {
+            v = (int)srcp[off + 1];
+        } else {
+            int a = (int)srcp[off];
+            int b = (int)srcp[off + 1];
+            v = (a > b) ? a : b;
+        }
+        dstp[off] = (uchar)v;
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * kf_max_extend_blocks_v — ExtendBlocks vertical pass (cpu/kl twin,
+ * KFMFilterBase.cu; same instantiation coverage as the h pass).  Last row
+ * self-copies, row 0 takes the row below, interior takes max(self, below).
+ * Grid: 2D (nBlkX,nBlkY).  Upstream composes h (dst->tmp) then v (tmp->dst);
+ * the composed ping-pong equals the in-place 3-pass cpu_max_extend_blocks
+ * for nBlkX,nBlkY >= 2 (mode U proves it: the mirror runs the ping-pong
+ * while the golden runs the in-place algorithm — different code paths, same
+ * result; at nBlk 1 the CPU twin reads out of bounds, so production block
+ * counts stay >= 2).  // ALG-VERIFIED (integer)
+ * -------------------------------------------------------------------------*/
+kernel void kf_max_extend_blocks_v(
+    __global       uchar* __restrict dstp,
+    __global const uchar* __restrict srcp,
+    int pitch, int nBlkX, int nBlkY)
+{
+    int bx = (int)get_global_id(0);
+    int by = (int)get_global_id(1);
+    if (bx < nBlkX && by < nBlkY) {
+        int off = bx + by * pitch;
+        int v;
+        if (by == nBlkY - 1) {
+            v = (int)srcp[off];
+        } else if (by == 0) {
+            v = (int)srcp[off + pitch];
+        } else {
+            int a = (int)srcp[off];
+            int b = (int)srcp[off + pitch];
+            v = (a > b) ? a : b;
+        }
+        dstp[off] = (uchar)v;
     }
 }

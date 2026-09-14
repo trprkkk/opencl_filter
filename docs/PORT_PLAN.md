@@ -181,10 +181,11 @@ To get a working deinterlacer you must port the mvtools-equivalent layers:
   KPatchCombe/KFMSwitch kernel-complete with the KFMKernel.cu inventory),
   and five more CombingAnalyze/CompareFields helpers from the same file
   (`kf_average`, `kf_max`, `kf_merge_uvflags`, `kf_copy_border`,
-  `kf_analyze_frame`, all ALG-VERIFIED) — only the `kl_copy_pad` pair and
-  the `kl_max_extend_blocks` pair remain unported in `KFMFilterBase.cu`
-  (KFMKernel.cu itself is inventoried host-only, no device kernels; see
-  `docs/KFM_PORT_SPEC.md`).
+  `kf_analyze_frame`, all ALG-VERIFIED), plus the padded-frame copies
+  `kf_copy_pad`/`kf_copy_pad_2plane` and the ExtendBlocks ping-pong
+  `kf_max_extend_blocks_h/v` (ALG-VERIFIED) — `KFMFilterBase.cu` is now
+  fully ported (KFMKernel.cu itself is inventoried host-only, no device
+  kernels; see `docs/KFM_PORT_SPEC.md`).
   **KNoiseClip** (`kf_noise_clip`, from DecombeUCF.cu, in `kfm_noiseclip.cl`)
   is also ALG-VERIFIED — a self-contained 8-bit filter that is
   kernel-complete. The **KDeblock core** `kf_deblock` (Deblock.cu `kl_deblock`,

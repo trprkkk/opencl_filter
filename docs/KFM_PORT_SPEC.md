@@ -177,13 +177,14 @@ filter is not run here. `kf_and_coefs` float contraction is a `// RIG-VERIFY`
 item (CUDA may fuse `a*b+c` into fma; <1 ulp difference).
 
 ### `KFMFilterBase` coefficient kernels (kf_calc_combe / kf_merge_uvcoefs /
-kf_extend_coef2 / kf_apply_uvcoefs_420 / kf_padv / kf_padh / kf_merge_block,
+kf_extend_coef2 / kf_apply_uvcoefs_420 / kf_padv / kf_padh / kf_merge_block /
+kf_average / kf_max / kf_merge_uvflags / kf_copy_border / kf_analyze_frame,
 src/opencl/kfm/kernels/kfm_filterbase.cl)
 
 `KFMFilterBase.cu` is the shared base class and defines the coefficient kernels
 that KAnalyzeStatic is assembled from (`cpu_*` twins exist in the same file).
-Seven are ported here and `// ALG-VERIFIED` via `python/run_kfm_filterbase.py`
-(1330 cases) against the CPU mirror `sim/kfm_filterbase_ref.cpp` and an
+Twelve are ported here and `// ALG-VERIFIED` via `python/run_kfm_filterbase.py`
+(2000 cases) against the CPU mirror `sim/kfm_filterbase_ref.cpp` and an
 independent Python golden. All are per-pixel/per-plane integer ops (no float),
 so the CUDA 4-wide vectorisation is equivalent to a scalar port.
 
@@ -222,6 +223,41 @@ so the CUDA 4-wide vectorisation is equivalent to a scalar port.
   flag domain is transcribed verbatim (flag > 128 drives the addend negative
   through an arithmetic `>> 7`, with the `(PX)` cast wrapping exactly like
   `VHelper::cast_to`), and the 0..255 flag sweep pins that path. 8/16-bit.
+- `kf_average` — field-pair temporal mean (`cpu_average`/`kl_average` — exact
+  twins; uchar4/ushort4): `dst = (src0+src1) >> 1` per pixel (floor mean; sums
+  are non-negative so the shift is exact and the result always in range; odd
+  sums pin the floor path). 8/16-bit.
+- `kf_max` — per-pixel max (`cpu_max`/`kl_max` — exact twins; uint8_t ONLY
+  instantiation upstream, the uchar4 line is commented out — so the uchar
+  kernel at arbitrary width is exact parity). Faithful oddity: upstream
+  assigns the int tmp straight to the uint8 dst (its `cast_to` line is
+  commented out); the value is always in range so this equals a plain store.
+- `kf_merge_uvflags` — `MergeUVFlags` core (`cpu_merge_uvflags` /
+  `kl_merge_uvflags` — exact twins; uint8, scalar): in-place `fY |= ((fU|fV)
+  << 4)` with the UV flag read at subsampled offset `(x>>logUVx, y>>logUVy)`.
+  Race-free (each lane touches only its own fY element; U/V read-only); the
+  shift is int arithmetic and the uint8_t `|=` store wraps mod 256 (full
+  uchar sweep pins the wrap).
+- `kf_copy_border` — the extreme-row copy behind the `kf_extend_coef2` header
+  note (`cpu_copy_border`/`kl_copy_border` — exact twins; CPU-fallback helper
+  of the ExtendCoefs fallback path): for y in [0,vborder), rows y and
+  height-y-1 straight from src to dst (bottom index verbatim
+  `(height - y - 1)`). dst is pre-filled to differ everywhere, so stray writes
+  show; the `vborder*2 > height` lane overlap is covered (benign: colliding
+  lanes write identical values). 8/16-bit.
+- `kf_analyze_frame` — `CompareFields` flag classifier
+  (`cpu_analyze_frame`/`kl_analyze_frame` — exact twins; uchar4/ushort4
+  sources via `LaunchAnalyzeFrame`, uchar flags; distinct from the uchar2
+  block-based `kl_analyze_frame` that lives in CombingAnalyze.cu): `t =
+  |a+4c+e-3(b+d)|` UNSHIFTED from base rows y-1/y/y+1 and sref rows y/y+1
+  (no `>> 2` here, unlike `kf_calc_combe`; max 6*PX_MAX, no int overflow),
+  `diff = |mref[y]-base[y]|`, `flag = (t>threshS ? SHIMA:0) |
+  (t>threshLS ? LSHIMA:0) | (diff>threshM ? MOVE:0)` with MOVE=1, SHIMA=2,
+  LSHIMA=4 (KFM.h). Sources point at the interior origin of VPAD-padded planes
+  (host pad layout/offset is a RIG-VERIFY seam as with the pads) — but the
+  border outputs are defined by the pad, so ALL height rows are verified with
+  padded inputs, with crafted fields pinning the strict-`>` boundaries at
+  t/diff = 0, 1, maxv and 6*maxv. 8/16-bit.
 
 These, together with `kf_min_frames` and `kf_and_coefs` (in kfm_mergestatic.cl),
 make KAnalyzeStatic's kernel set complete (see the MergeStatic section for the
@@ -403,18 +439,22 @@ checklist) is `docs/RIG_HANDOFF_KDEBLOCK.md`.
   pipelines). Deblock QPClip is a pure host/props filter with no device kernel
   (FrameType is CPU-only); ShowQP's kernel `kl_scale_qp` is transcribed
   (`kf_scale_qp`, `// RIG-VERIFY`), its frame-assembly is host.
-- Unported `KFMFilterBase.cu` kernels (all serve CombingAnalyze — one batch):
-  `kl_average`/`cpu_average` (field-pair `(a+b)>>1`, CombingAnalyze.cu:888),
-  `kl_max`/`cpu_max` (uint8 2-plane max, CombingAnalyze.cu:1054/1430),
+- Unported `KFMFilterBase.cu` kernels (the rest of the CombingAnalyze batch):
   `kl_copy_pad`/`kl_copy_pad_2plane` (mirror-pad copy with the uchar4
-  lane-reversal quirk; also backs `KFMPad`), `kl_max_extend_blocks_h/v` +
+  lane-reversal quirk; also backs `KFMPad`) and `kl_max_extend_blocks_h/v` +
   `cpu_max_extend_blocks` (`ExtendBlocks`, out-of-place h/v ping-pong vs one
-  in-place CPU twin — needs care), `kl_analyze_frame`, `kl_merge_uvflags`,
-  `kl_copy_border` (+ twins). `kl_copy`/`kl_fill` stay covered by KTGMC
-  `kt_copy` (memcpy-equivalent, no port planned).
+  in-place CPU twin — needs care). `kl_average`, `kl_max`,
+  `kl_merge_uvflags`, `kl_copy_border` and `kl_analyze_frame` (+ twins) are
+  ported above (`kf_average`, `kf_max`, `kf_merge_uvflags`, `kf_copy_border`,
+  `kf_analyze_frame`). `kl_copy`/`kl_fill` stay covered by KTGMC `kt_copy`
+  (memcpy-equivalent, no port planned). The uchar2 block-based
+  `kl_analyze_frame` in CombingAnalyze.cu is a different kernel and stays with
+  that file's batch.
 
 ## Notes / licence
 
 KFM is MIT; distribute derived files under MIT terms (differs from KTGMC's GPL).
 Grounding sources: this sandbox re-clones `AviSynthCUDAFilters` to
+`/tmp/avs_cuda/KFM`.
+urces: this sandbox re-clones `AviSynthCUDAFilters` to
 `/tmp/avs_cuda/KFM`.

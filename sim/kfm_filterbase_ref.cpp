@@ -1,9 +1,10 @@
-/* CPU mirror of the seven KFM KFMFilterBase.cu kernels in
+/* CPU mirror of the twelve KFM KFMFilterBase.cu kernels in
  * src/opencl/kfm/kernels/kfm_filterbase.cl.  cpu_calc_combe / cpu_merge_uvcoefs
- * / cpu_apply_uvcoefs_420 / cpu_padv / cpu_padh / cpu_merge are exact upstream
- * twins; mode E replicates the CUDA kl_extend_coef2 device kernel (the .cl
- * transliteration target — the upstream CPU *fallback* branch differs at rows
- * 0 and height-1, see the .cl header).
+ * / cpu_apply_uvcoefs_420 / cpu_padv / cpu_padh / cpu_merge / cpu_average /
+ * cpu_max / cpu_merge_uvflags / cpu_copy_border / cpu_analyze_frame are exact
+ * upstream twins; mode E replicates the CUDA kl_extend_coef2 device kernel
+ * (the .cl transliteration target — the upstream CPU *fallback* branch differs
+ * at rows 0 and height-1, see the .cl header).
  *
  * Usage: kfm_filterbase_ref <in> <out>
  *   All ints on one line.  Modes:
@@ -39,6 +40,26 @@
  *                      (flag*src60+(128-flag)*src24+64)>>7, stored mod 2^bits
  *                      (the (PX) cast wrap; bits = 8 or 16).
  *                      -> output width*height
+ *     R average      : R width height pitch  nP  s0(nP) s1(nP)
+ *                      dst = (s0+s1)>>1 per pixel (floor mean).
+ *                      -> output width*height
+ *     X max          : X width height pitch  nP  s0(nP) s1(nP)
+ *                      uchar per-pixel max (uint8-only upstream).
+ *                      -> output width*height
+ *     F merge_uvflags: F width height pitchY pitchUV logUVx logUVy  nY nUV
+ *                      fY(nY) fU(nUV) fV(nUV); in-place (on a copy)
+ *                      fY |= ((fU|fV)<<4) at subsampled UV offsets, stored
+ *                      mod 256 (the uint8_t |= wrap).
+ *                      -> output width*height
+ *     C copy_border  : C width height pitch vborder  nP  src(nP) dst(nP)
+ *                      copy rows y and height-y-1 for y in [0,vborder).
+ *                      -> output whole dst buffer (interior must be untouched)
+ *     N analyze_frame: N width height pitch dpitch tM tS tLS  nS
+ *                      base(nS) sref(nS) mref(nS); sources are VPAD-style
+ *                      padded (nS = pitch*(height+2), interior origin at row
+ *                      1); t = CalcCombe, diff = |mref-base|,
+ *                      flag = SHIMA/LSHIMA/MOVE threshold fold.
+ *                      -> output whole dpitch*height buffer (-1 in gaps)
  */
 #include <cstdio>
 #include <cstdlib>
@@ -158,6 +179,65 @@ int main(int argc,char**argv){
             int inv=128-combe;
             int t=(combe*s60[xx+yy*pitch]+inv*s24[xx+yy*pitch]+64)>>7;
             out.push_back(t&mask); // the (PX) cast wrap
+        }
+    } else if(m=='R'){
+        int width=rd(),height=rd(),pitch=rd(),nP=rd();
+        vector<int> s0=read(nP),s1=read(nP);
+        for(int yy=0;yy<height;yy++)for(int xx=0;xx<width;xx++){
+            int off=xx+yy*pitch;
+            out.push_back((s0[off]+s1[off])>>1); // floor mean, always in range
+        }
+    } else if(m=='X'){
+        int width=rd(),height=rd(),pitch=rd(),nP=rd();
+        vector<int> s0=read(nP),s1=read(nP);
+        for(int yy=0;yy<height;yy++)for(int xx=0;xx<width;xx++){
+            int off=xx+yy*pitch;
+            int a=s0[off],b=s1[off];
+            out.push_back((a>b)?a:b);
+        }
+    } else if(m=='F'){
+        int width=rd(),height=rd(),pitchY=rd(),pitchUV=rd(),lx=rd(),ly=rd();
+        int nY=rd(),nUV=rd();
+        vector<int> fY=read(nY),fU=read(nUV),fV=read(nUV);
+        out.assign(fY.begin(),fY.end()); // mirror in-place on a copy
+        for(int yy=0;yy<height;yy++)for(int xx=0;xx<width;xx++){
+            int oUV=(xx>>lx)+(yy>>ly)*pitchUV;
+            int flagUV=fU[oUV]|fV[oUV];
+            int oY=xx+yy*pitchY;
+            int v=out[oY]|(flagUV<<4);
+            out[oY]=v-((v>>8)<<8); // the uint8_t |= wrap (mod 256)
+        }
+        vector<int> outlog; outlog.reserve(width*height);
+        for(int yy=0;yy<height;yy++)for(int xx=0;xx<width;xx++)
+            outlog.push_back(out[xx+yy*pitchY]);
+        out.swap(outlog);
+    } else if(m=='C'){
+        int width=rd(),height=rd(),pitch=rd(),vborder=rd(),nP=rd();
+        vector<int> src=read(nP),dst=read(nP);
+        for(int yy=0;yy<vborder;yy++)for(int xx=0;xx<width;xx++){
+            dst[xx+yy*pitch]=src[xx+yy*pitch];
+            dst[xx+(height-yy-1)*pitch]=src[xx+(height-yy-1)*pitch];
+        }
+        out.swap(dst);
+    } else if(m=='N'){
+        int width=rd(),height=rd(),pitch=rd(),dpitch=rd();
+        int tM=rd(),tS=rd(),tLS=rd(),nS=rd();
+        vector<int> base=read(nS),sref=read(nS),mref=read(nS);
+        int org=pitch; // interior origin: 1 pad row above
+        out.assign((size_t)dpitch*height,-1); // strided output; gaps stay sentinel
+        for(int yy=0;yy<height;yy++)for(int xx=0;xx<width;xx++){
+            int a=base[org+xx+(yy-1)*pitch];
+            int b=sref[org+xx+yy*pitch];
+            int c=base[org+xx+yy*pitch];
+            int d=sref[org+xx+(yy+1)*pitch];
+            int e=base[org+xx+(yy+1)*pitch];
+            int t=CalcCombe(a,b,c,d,e); // unshifted: no >>2 here
+            int diff=mref[org+xx+yy*pitch]-c; if(diff<0)diff=-diff;
+            int flag=0;
+            if(t>tS)flag|=2;    // SHIMA
+            if(t>tLS)flag|=4;   // LSHIMA
+            if(diff>tM)flag|=1; // MOVE
+            out[(size_t)xx+yy*dpitch]=flag;
         }
     } else { fprintf(stderr,"bad mode %c\n",m); return 2; }
     FILE* o=fopen(argv[2],"w");

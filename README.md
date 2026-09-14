@@ -147,10 +147,15 @@ Makefile                       # make test  (no OpenCL required)
   = padv-then-padh host sequencing, as DeblockPlane does), and the MergeBlock
   blender `kf_merge_block` (`(flag*src60+(128-flag)*src24+64)>>7`, uchar flag at
   both depths, full 0..255 flag sweep; makes KPatchCombe/KFMSwitch
-  kernel-complete). These plus `kf_min_frames`/`kf_and_coefs` complete
-  KAnalyzeStatic's kernel set (only the VPAD-pad host assembly remains,
-  `// RIG-VERIFY`). **ALG-VERIFIED** via `python/run_kfm_filterbase.py`
-  (1330 cases, integer-exact).
+  kernel-complete), plus the CombingAnalyze/CompareFields helpers `kf_average`
+  (floor mean), `kf_max` (uint8 max; scalar twin, so any width),
+  `kf_merge_uvflags` (in-place `fY|=((fU|fV)<<4)`, mod-256 wrap covered),
+  `kf_copy_border` (extreme rows straight through) and `kf_analyze_frame`
+  (SHIMA/LSHIMA/MOVE threshold fold over padded taps, all rows verified).
+  These plus `kf_min_frames`/`kf_and_coefs` complete KAnalyzeStatic's kernel
+  set (only the VPAD-pad host assembly remains, `// RIG-VERIFY`).
+  **ALG-VERIFIED** via `python/run_kfm_filterbase.py` (2000 cases,
+  integer-exact).
 - `kfm_noiseclip.cl`: **KFM KNoiseClip** — `kf_noise_clip`, faithful to
   `cpu_noise_clip`/`dev_limitter` (KFM/DecombeUCF.cu, MIT). Self-contained
   **8-bit-only** filter that maps each src pixel against a `noise` pixel into

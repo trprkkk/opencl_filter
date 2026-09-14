@@ -177,9 +177,14 @@ To get a working deinterlacer you must port the mvtools-equivalent layers:
   host assembly of the KAnalyzeStatic pipeline is left (`// RIG-VERIFY`).
   The same file also hosts the shared mirror pads `kf_padv`/`kf_padh`
   (ALG-VERIFIED, solo + composed padv→padh), closing the KDeblock pad-kernel
-  gap, and the MergeBlock blender `kf_merge_block` (ALG-VERIFIED), which —
-  together with the KFMKernel.cu inventory (host-only, no device kernels;
-  see `docs/KFM_PORT_SPEC.md`) — makes KPatchCombe/KFMSwitch kernel-complete.
+  gap, the MergeBlock blender `kf_merge_block` (ALG-VERIFIED, making
+  KPatchCombe/KFMSwitch kernel-complete with the KFMKernel.cu inventory),
+  and five more CombingAnalyze/CompareFields helpers from the same file
+  (`kf_average`, `kf_max`, `kf_merge_uvflags`, `kf_copy_border`,
+  `kf_analyze_frame`, all ALG-VERIFIED) — only the `kl_copy_pad` pair and
+  the `kl_max_extend_blocks` pair remain unported in `KFMFilterBase.cu`
+  (KFMKernel.cu itself is inventoried host-only, no device kernels; see
+  `docs/KFM_PORT_SPEC.md`).
   **KNoiseClip** (`kf_noise_clip`, from DecombeUCF.cu, in `kfm_noiseclip.cl`)
   is also ALG-VERIFIED — a self-contained 8-bit filter that is
   kernel-complete. The **KDeblock core** `kf_deblock` (Deblock.cu `kl_deblock`,

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Validate the seven KFM KFMFilterBase.cu kernels
+"""Validate the twelve KFM KFMFilterBase.cu kernels
 (kf_calc_combe, kf_merge_uvcoefs, kf_extend_coef2, kf_apply_uvcoefs_420,
-kf_padv, kf_padh, kf_merge_block) in src/opencl/kfm/kernels/kfm_filterbase.cl
+kf_padv, kf_padh, kf_merge_block, kf_average, kf_max, kf_merge_uvflags,
+kf_copy_border, kf_analyze_frame) in src/opencl/kfm/kernels/kfm_filterbase.cl
 against the CPU mirror sim/kfm_filterbase_ref.cpp with an independent Python
 golden.
 
-All seven are integer-exact.  kf_calc_combe is verified over its interior rows
+All twelve are integer-exact.  kf_calc_combe is verified over its interior rows
 (y in [2,height-3]); its border rows read a host-padded plane (VPAD) and are
 RIG-VERIFY (mirror/golden put a -1 sentinel there).  kf_extend_coef2 is the CUDA
 kl_extend_coef2 device kernel (upstream's CPU fallback differs at rows 0 and
@@ -13,7 +14,15 @@ height-1; the OpenCL target is the device kernel).  kf_padv/kf_padh are the
 in-place mirror pads (verified solo plus the composed padv-then-padh 2D pad in
 upstream Deblock order).  kf_merge_block is the MergeBlock masked blender
 (flag is uchar at both bit depths; full 0..255 flag sweep pins the
-negative-invcombe wrap path too).
+negative-invcombe wrap path too).  kf_average is the floor mean (odd sums pin
+the floor path).  kf_max is scalar uint8 upstream, so arbitrary widths are
+exact parity.  kf_merge_uvflags folds UV flags into Y with a mod-256 |= wrap
+(full uchar sweep pins the wrap).  kf_copy_border copies the extreme rows
+straight through (dst pre-filled to differ everywhere, so strays show; the
+vborder*2 > height lane overlap is covered).  kf_analyze_frame classifies
+SHIMA/LSHIMA/MOVE flags from unshifted CalcCombe + |mref-base| taps over
+padded sources, verified over ALL rows with the strict-> threshold boundaries
+pinned by crafted fields (t/diff = 0, 1, maxv, 6*maxv).
 
 Run:  python3 python/run_kfm_filterbase.py
 """
@@ -124,6 +133,71 @@ def golden_merge_block(width, height, pitch, fpitch, bits, s24, s60, flag):
             t = (combe * s60[xx + yy * pitch] +
                  (128 - combe) * s24[xx + yy * pitch] + 64) >> 7
             out.append(t & mask)  # the (PX) cast wrap
+    return out
+
+
+def golden_average(width, height, pitch, s0, s1):
+    out = []
+    for yy in range(height):
+        for xx in range(width):
+            off = xx + yy * pitch
+            out.append((s0[off] + s1[off]) // 2)
+    return out
+
+
+def golden_max(width, height, pitch, s0, s1):
+    out = []
+    for yy in range(height):
+        for xx in range(width):
+            off = xx + yy * pitch
+            a, b = s0[off], s1[off]
+            out.append(a if a >= b else b)
+    return out
+
+
+def golden_merge_uvflags(width, height, pitchY, pitchUV, lx, ly, fY, fU, fV):
+    fY = list(fY)
+    for yy in range(height):
+        for xx in range(width):
+            oY = xx + yy * pitchY
+            oUV = (xx >> lx) + (yy >> ly) * pitchUV
+            fY[oY] = (fY[oY] | ((fU[oUV] | fV[oUV]) * 16)) % 256
+    return [fY[xx + yy * pitchY] for yy in range(height)
+            for xx in range(width)]
+
+
+def golden_copy_border(src, dst, width, height, pitch, vborder):
+    d = list(dst)
+    for yy in range(vborder):
+        top_src = yy * pitch
+        bot_src = (height - yy - 1) * pitch
+        for xx in range(width):
+            d[top_src + xx] = src[top_src + xx]
+            d[bot_src + xx] = src[bot_src + xx]
+    return d
+
+
+def golden_analyze_frame(width, height, pitch, dpitch, tM, tS, tLS,
+                         base, sref, mref):
+    out = [-1] * (dpitch * height)  # strided output; gaps stay sentinel
+    org = pitch  # interior origin: 1 pad row above
+    for yy in range(height):
+        for xx in range(width):
+            a = base[org + xx + (yy - 1) * pitch]
+            b = sref[org + xx + yy * pitch]
+            c = base[org + xx + yy * pitch]
+            d = sref[org + xx + (yy + 1) * pitch]
+            e = base[org + xx + (yy + 1) * pitch]
+            t = calc_combe_val(a, b, c, d, e)  # unshifted: no >>2 here
+            diff = abs(mref[org + xx + yy * pitch] - c)
+            flag = 0
+            if t > tS:
+                flag |= 2   # SHIMA
+            if t > tLS:
+                flag |= 4   # LSHIMA
+            if diff > tM:
+                flag |= 1   # MOVE
+            out[xx + yy * dpitch] = flag
     return out
 
 
@@ -348,9 +422,194 @@ def main():
                     break
             if total >= 3: break
 
+    # R: average (floor mean; mult-of-4 widths = exact CUDA coverage)
+    for _ in range(140):
+        bits = rng.choice([8, 8, 16])
+        maxv = 255 if bits == 8 else 65535
+        width = rng.randint(1, 16) * 4
+        height = rng.randint(1, 20)
+        pitch = width + rng.choice([0, 2])
+        n = pitch * height
+        # extremes + odd sums (floor path) + random
+        pool = [0, 0, 1, maxv - 1, maxv, maxv]
+        s0 = [rng.choice(pool) if rng.random() < 0.4
+              else rng.randint(0, maxv) for _ in range(n)]
+        s1 = [rng.choice(pool) if rng.random() < 0.4
+              else rng.randint(0, maxv) for _ in range(n)]
+        hdr = [ord('R'), width, height, pitch, n]
+        got = run_mirror(hdr + s0 + s1)
+        exp = golden_average(width, height, pitch, s0, s1)
+        total += 1
+        if got != exp:
+            ok = False
+            for i, (g, e) in enumerate(zip(got, exp)):
+                if g != e:
+                    print("average MISMATCH", width, height, bits,
+                          "px", i, g, e)
+                    break
+            if total >= 3: break
+
+    # X: max (scalar uint8 twin: arbitrary widths, ties forced)
+    for _ in range(120):
+        width = rng.randint(1, 40)
+        height = rng.randint(1, 20)
+        pitch = width + rng.choice([0, 1, 3])
+        n = pitch * height
+        pool = [0, 1, 127, 128, 254, 255]
+        s0 = [rng.choice(pool) if rng.random() < 0.4
+              else rng.randint(0, 255) for _ in range(n)]
+        s1 = [rng.choice(pool) if rng.random() < 0.4
+              else rng.randint(0, 255) for _ in range(n)]
+        for i in rng.sample(range(n), min(n, 5)):  # ties
+            s1[i] = s0[i]
+        hdr = [ord('X'), width, height, pitch, n]
+        got = run_mirror(hdr + s0 + s1)
+        exp = golden_max(width, height, pitch, s0, s1)
+        total += 1
+        if got != exp:
+            ok = False
+            for i, (g, e) in enumerate(zip(got, exp)):
+                if g != e:
+                    print("max MISMATCH", width, height, "px", i, g, e)
+                    break
+            if total >= 3: break
+
+    # F: merge_uvflags (in-place fold, mod-256 |= wrap; 444/422/420-style lx/ly)
+    for _ in range(130):
+        lx = rng.choice([0, 1])
+        ly = rng.choice([0, 1])
+        width = rng.randint(1, 24)
+        height = rng.randint(1, 16)
+        pitchY = width + rng.choice([0, 2])
+        uvw = ((width - 1) >> lx) + 1
+        uvh = ((height - 1) >> ly) + 1
+        pitchUV = uvw + rng.choice([0, 2])
+        nY = pitchY * height
+        nUV = pitchUV * uvh
+        fY = [rng.randint(0, 255) for _ in range(nY)]
+        pick = rng.random()
+        if pick < 0.4:       # production domain: small flag bits, no wrap
+            fU = [rng.randint(0, 7) for _ in range(nUV)]
+            fV = [rng.randint(0, 7) for _ in range(nUV)]
+        elif pick < 0.7:     # full uchar sweep: wrap path
+            fU = [rng.randint(0, 255) for _ in range(nUV)]
+            fV = [rng.randint(0, 255) for _ in range(nUV)]
+        else:                # mixed
+            fU = [rng.randint(0, 7) for _ in range(nUV)]
+            fV = [rng.randint(0, 255) for _ in range(nUV)]
+        hdr = [ord('F'), width, height, pitchY, pitchUV, lx, ly, nY, nUV]
+        got = run_mirror(hdr + fY + fU + fV)
+        exp = golden_merge_uvflags(width, height, pitchY, pitchUV, lx, ly,
+                                   fY, fU, fV)
+        total += 1
+        if got != exp:
+            ok = False
+            for i, (g, e) in enumerate(zip(got, exp)):
+                if g != e:
+                    print("merge_uvflags MISMATCH", width, height, lx, ly,
+                          "px", i, g, e)
+                    break
+            if total >= 3: break
+
+    # C: copy_border (extreme rows through; dst pre-filled to catch strays)
+    for _ in range(120):
+        bits = rng.choice([8, 8, 16])
+        maxv = 255 if bits == 8 else 65535
+        width = rng.randint(1, 32)   # scalar twin: arbitrary
+        height = rng.randint(1, 16)
+        vborder = rng.randint(1, height)  # incl. vborder*2 > height overlap
+        pitch = width + rng.choice([0, 1, 3])
+        n = pitch * height
+        src = [rng.randint(0, maxv) for _ in range(n)]
+        # dst differs from src at EVERY pixel: border must be overwritten,
+        # interior must survive
+        off = (maxv + 1) // 2
+        dst = [(s + off) % (maxv + 1) for s in src]
+        hdr = [ord('C'), width, height, pitch, vborder, n]
+        got = run_mirror(hdr + src + dst)
+        exp = golden_copy_border(src, dst, width, height, pitch, vborder)
+        total += 1
+        if got != exp:
+            ok = False
+            for i, (g, e) in enumerate(zip(got, exp)):
+                if g != e:
+                    print("copy_border MISMATCH", width, height, vborder,
+                          bits, "px", i, g, e)
+                    break
+            if total >= 3: break
+
+    # N: analyze_frame (all rows incl. borders via padded sources; the strict->
+    # threshold boundaries are pinned by crafted fields, not luck)
+    for case in range(160):
+        bits = rng.choice([8, 8, 16])
+        maxv = 255 if bits == 8 else 65535
+        width = rng.randint(1, 12) * 4   # 4-wide twin: mult of 4
+        height = rng.randint(1, 18)
+        pitch = width + rng.choice([0, 2])
+        dpitch = width + rng.choice([0, 1, 3])
+        nS = pitch * (height + 2)
+        mode = case % 6
+        if mode == 0:
+            # uniform field: t = 0, diff = 0 -> pins the 0 boundary
+            v = rng.randint(0, maxv)
+            base = [v] * nS
+            sref = [v] * nS
+            mref = [v] * nS
+            tM = rng.choice([-1, 0, 1])
+            tS = rng.choice([-1, 0, 1])
+            tLS = rng.choice([-1, 0, 1])
+        elif mode == 1:
+            # LSB-flipped mref: diff = 1 everywhere -> pins the 1 boundary
+            base = [rng.randint(0, maxv) for _ in range(nS)]
+            sref = [rng.randint(0, maxv) for _ in range(nS)]
+            mref = [b ^ 1 for b in base]
+            tM = rng.choice([-1, 0, 1, 2])
+            tS = rng.choice([0, 100, 6 * maxv, 10 ** 9])
+            tLS = rng.choice([0, 100, 6 * maxv, 10 ** 9])
+        elif mode == 2:
+            # opposed-phase stripes: t = maxv everywhere
+            base = [(maxv if r % 2 else 0)
+                    for r in range(height + 2) for _ in range(pitch)]
+            sref = [(0 if r % 2 else maxv)
+                    for r in range(height + 2) for _ in range(pitch)]
+            mref = list(base)  # diff = 0
+            tM = rng.choice([-1, 0])
+            tS = rng.choice([maxv - 1, maxv, maxv + 1])
+            tLS = rng.choice([maxv - 1, maxv, maxv + 1])
+        elif mode == 3:
+            # base = maxv, sref = 0: t = 6*maxv (ceiling) everywhere
+            base = [maxv] * nS
+            sref = [0] * nS
+            mref = [rng.randint(0, maxv) for _ in range(nS)]
+            tM = rng.choice([0, maxv])
+            tS = rng.choice([6 * maxv - 1, 6 * maxv])
+            tLS = rng.choice([6 * maxv - 1, 6 * maxv])
+        else:
+            # random fuzz with wide thresholds
+            base = [rng.randint(0, maxv) for _ in range(nS)]
+            sref = [rng.randint(0, maxv) for _ in range(nS)]
+            mref = [rng.randint(0, maxv) for _ in range(nS)]
+            tM = rng.choice([-1, 0, 1, 100, maxv, maxv + 1, 10 ** 9])
+            tS = rng.choice([-1, 0, 1, 1000, 6 * maxv, 10 ** 9])
+            tLS = rng.choice([-1, 0, 1, 1000, 6 * maxv, 10 ** 9])
+        hdr = [ord('N'), width, height, pitch, dpitch, tM, tS, tLS, nS]
+        got = run_mirror(hdr + base + sref + mref)
+        exp = golden_analyze_frame(width, height, pitch, dpitch, tM, tS, tLS,
+                                   base, sref, mref)
+        total += 1
+        if got != exp:
+            ok = False
+            for i, (g, e) in enumerate(zip(got, exp)):
+                if g != e:
+                    print("analyze_frame MISMATCH", width, height, bits,
+                          tM, tS, tLS, "px", i, g, e)
+                    break
+            if total >= 3: break
+
     print(f"KFM FilterBase (calc_combe/merge_uvcoefs/extend_coef2/"
-          f"apply_uvcoefs_420/padv/padh/merge_block): {'PASS' if ok else 'FAIL'} "
-          f"({total} cases)")
+          f"apply_uvcoefs_420/padv/padh/merge_block/average/max/"
+          f"merge_uvflags/copy_border/analyze_frame): "
+          f"{'PASS' if ok else 'FAIL'} ({total} cases)")
     return 0 if ok else 1
 
 

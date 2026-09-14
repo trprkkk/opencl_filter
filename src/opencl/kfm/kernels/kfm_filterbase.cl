@@ -19,17 +19,23 @@
  * This file supplies the four kernels defined in KFMFilterBase.cu that the
  * pipeline still needs (kf_min_frames and kf_and_coefs already live in
  * kfm_mergestatic.cl), plus the shared mirror-pad helpers kf_padv/kf_padh
- * (used by KDeblock's DeblockPlane, CombingAnalyze flag planes, ...) and the
- * MergeBlock blender kf_merge_block (used by KPatchCombe/KFMSwitch).
- * All seven are per-pixel / per-plane integer ops whose
+ * (used by KDeblock's DeblockPlane, CombingAnalyze flag planes, ...), the
+ * MergeBlock blender kf_merge_block (used by KPatchCombe/KFMSwitch), and the
+ * five CombingAnalyze/CompareFields helpers kf_average, kf_max,
+ * kf_merge_uvflags, kf_copy_border and kf_analyze_frame.
+ * All twelve are per-pixel / per-plane integer ops whose
  * channels are independent, so the CUDA 4-wide vectorisation is equivalent to a
- * scalar translation (bit-identical for plane width a multiple of 4).
+ * scalar translation (bit-identical for plane width a multiple of 4; the
+ * scalar twins kf_max / kf_merge_uvflags / kf_copy_border are exact twins at
+ * any width).
  *
  * Status:
  *   // ALG-VERIFIED (python/run_kfm_filterbase.py) vs sim/kfm_filterbase_ref.cpp
  *   //   cpu_calc_combe / cpu_merge_uvcoefs / cpu_apply_uvcoefs_420 /
- *   //   cpu_padv / cpu_padh / cpu_merge are exact twins; cpu_extend_coef
- *   //   (below) is the CUDA kl_extend_coef2 twin that the .cl transliterates.
+ *   //   cpu_padv / cpu_padh / cpu_merge / cpu_average / cpu_max /
+ *   //   cpu_merge_uvflags / cpu_copy_border / cpu_analyze_frame are exact
+ *   //   twins; cpu_extend_coef (below) is the CUDA kl_extend_coef2 twin that
+ *   //   the .cl transliterates.
  *
  * Fidelity / assembly notes:
  *  - calc_combe / merge_uvcoefs / apply_uvcoefs_420 have identical CUDA and CPU
@@ -50,6 +56,14 @@
  *    interior (rows 2..height-3) here.  The host pad layout / offset is a
  *    RIG-VERIFY seam (the calc_combe launch geometry over the padded buffer is
  *    host glue, as with KEdgeLevel's el_to444 host sizing).
+ *  - analyze_frame likewise reads source rows y-1/y+1 unguarded from
+ *    VPAD-padded planes (interior-origin pointers; the host pad layout/offset
+ *    is a RIG-VERIFY seam as with padv/padh) — but its border outputs are
+ *    defined by the pad, so all height rows are verified with padded inputs.
+ *  - analyze_frame likewise reads source rows y-1/y+1 unguarded from
+ *    VPAD-padded planes (interior-origin pointers; the host pad layout/offset
+ *    is a RIG-VERIFY seam as with padv/padh) — but its border outputs are
+ *    defined by the pad, so all height rows are verified with padded inputs.
  *  - calc_combe's output is clamped to [0,255] regardless of pixel bit depth
  *    (upstream casts the clamped int to the pixel type; the coefficient planes
  *    KAnalyzeStatic uses are 0..128-scaled values, so this matches).
@@ -260,5 +274,159 @@ kernel void kf_merge_block(
         int invcombe = 128 - combe;
         int t = (combe * (int)src60[off] + invcombe * (int)src24[off] + 64) >> 7;
         dst[off] = (PX)t;
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * kf_average — temporal/pixel mean (cpu_average / kl_average twin,
+ * KFMFilterBase.cu; uchar4/ushort4 instantiations, driven by CombingAnalyze).
+ * dst = (src0 + src1) >> 1 per pixel (floor mean; sums are non-negative so
+ * the shift is exact, and the result is always in range, so
+ * VHelper::cast_to is a plain store).  Lanes are independent, so the scalar
+ * port is lane-identical to the vector CUDA kernel (bit-identical for plane
+ * width a multiple of 4).  Grid: 2D (width,height).  // ALG-VERIFIED (integer)
+ * -------------------------------------------------------------------------*/
+kernel void kf_average(
+    __global       PX* __restrict dst,
+    __global const PX* __restrict src0,
+    __global const PX* __restrict src1,
+    int width, int height, int pitch)
+{
+    int x = (int)get_global_id(0);
+    int y = (int)get_global_id(1);
+    if (x < width && y < height) {
+        int off = x + y * pitch;
+        int tmp = ((int)src0[off] + (int)src1[off]) >> 1;
+        dst[off] = (PX)tmp;
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * kf_max — per-pixel max (cpu_max / kl_max twin, KFMFilterBase.cu; uint8_t
+ * ONLY instantiation — the uchar4 instantiation is commented out upstream —
+ * so this uchar kernel is exact parity, at arbitrary width since the twin is
+ * scalar).  dst = max(src0, src1).  Faithful oddity: upstream assigns the int
+ * tmp straight to the uint8 dst (its VHelper::cast_to line is commented
+ * out); the value is always in range so this equals a plain store.  Grid: 2D
+ * (width,height).  // ALG-VERIFIED (integer)
+ * -------------------------------------------------------------------------*/
+kernel void kf_max(
+    __global       uchar* __restrict dst,
+    __global const uchar* __restrict src0,
+    __global const uchar* __restrict src1,
+    int width, int height, int pitch)
+{
+    int x = (int)get_global_id(0);
+    int y = (int)get_global_id(1);
+    if (x < width && y < height) {
+        int off = x + y * pitch;
+        int a = (int)src0[off];
+        int b = (int)src1[off];
+        dst[off] = (uchar)((a > b) ? a : b);
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * kf_merge_uvflags — MergeUVFlags core (cpu_merge_uvflags / kl_merge_uvflags
+ * twin, KFMFilterBase.cu; uint8_t-only, scalar).  In-place fold of the UV
+ * comb flags into the Y flag plane: fY |= ((fU | fV) << 4), with the UV flag
+ * read at subsampled offset (x>>logUVx, y>>logUVy).  Race-free: each lane
+ * touches only its own fY element (U/V are read-only).  The shift is int
+ * arithmetic and the uint8_t |= store wraps mod 256, reproduced here by the
+ * (uchar) cast (production flags are small, but the transcription covers the
+ * full uchar domain verbatim).  Grid: 2D (width,height).  // ALG-VERIFIED
+ * (integer)
+ * -------------------------------------------------------------------------*/
+kernel void kf_merge_uvflags(
+    __global       uchar* __restrict fY,
+    __global const uchar* __restrict fU,
+    __global const uchar* __restrict fV,
+    int width, int height, int pitchY, int pitchUV, int logUVx, int logUVy)
+{
+    int x = (int)get_global_id(0);
+    int y = (int)get_global_id(1);
+    if (x < width && y < height) {
+        int offUV = (x >> logUVx) + (y >> logUVy) * pitchUV;
+        int flagUV = (int)fU[offUV] | (int)fV[offUV];
+        int oY = x + y * pitchY;
+        fY[oY] = (uchar)((int)fY[oY] | (flagUV << 4));
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * kf_copy_border — extreme-row copy (cpu_copy_border / kl_copy_border twin,
+ * KFMFilterBase.cu; uint8_t/uint16_t instantiations; CPU-fallback helper used
+ * by the ExtendCoefs fallback path).  For y in [0,vborder), x in [0,width):
+ * copies row y and row height-y-1 from src to dst (extreme rows straight
+ * through — this is the twin whose divergence from the kl_extend_coef2 device
+ * kernel at rows 0/height-1 is noted in the file header).  Out-of-place;
+ * even where vborder*2 > height makes two lanes share a row, both write the
+ * identical value (same src read), so the overlap is benign.  CUDA reads y
+ * from the unguarded threadIdx.y (blockDim.y == vborder at every call site);
+ * the .cl guards x/y explicitly over exactly the twins' loop domain.  Grid:
+ * 2D (width,vborder).  // ALG-VERIFIED (integer)
+ * -------------------------------------------------------------------------*/
+kernel void kf_copy_border(
+    __global       PX* __restrict dst,
+    __global const PX* __restrict src,
+    int width, int height, int pitch, int vborder)
+{
+    int x = (int)get_global_id(0);
+    int y = (int)get_global_id(1);
+    if (x < width && y < vborder) {
+        dst[x + y * pitch] = src[x + y * pitch];
+        dst[x + (height - y - 1) * pitch] = src[x + (height - y - 1) * pitch];
+    }
+}
+
+/* Diff-flag bits for kf_analyze_frame (KFM.h: MOVE=1, SHIMA=2, LSHIMA=4). */
+#define KF_MOVE 1
+#define KF_SHIMA 2
+#define KF_LSHIMA 4
+
+/* ---------------------------------------------------------------------------
+ * kf_analyze_frame — CompareFields flag classifier (cpu_analyze_frame /
+ * kl_analyze_frame twin, KFMFilterBase.cu; uchar4/ushort4 source
+ * instantiations via LaunchAnalyzeFrame, uchar4 flag output; distinct from
+ * the uchar2 block-based kl_analyze_frame that lives in CombingAnalyze.cu).
+ * Per pixel, from base rows y-1/y/y+1, sref rows y/y+1, mref row y:
+ *   a=base[y-1], b=sref[y], c=base[y], d=sref[y+1], e=base[y+1]
+ *   t    = CalcCombe(a,b,c,d,e) = |a + 4c + e - 3(b+d)|   (UNSHIFTED — no
+ *            >> 2 here, unlike kf_calc_combe; max 6*PX_MAX, no int overflow)
+ *   diff = |mref[y] - c|
+ *   flag = (t > threshS ? SHIMA : 0) | (t > threshLS ? LSHIMA : 0)
+ *          | (diff > threshM ? MOVE : 0)                      (MakeDiffFlag)
+ * The taps are lane-independent, so the scalar port is lane-identical to the
+ * vector twin.  Sources point at the interior origin of VPAD-mirror-padded
+ * planes (rows y-1/y+1 are read unguarded, as upstream); the host-side pad
+ * layout/offset is a RIG-VERIFY seam as with kf_padv/kf_padh — but unlike
+ * kf_calc_combe, the border outputs are DEFINED by the pad, so all height
+ * rows are verified here with padded inputs.  Grid: 2D (width,height);
+ * source row stride pitch, flag row stride dstPitch.  // ALG-VERIFIED
+ * (integer)
+ * -------------------------------------------------------------------------*/
+kernel void kf_analyze_frame(
+    __global       uchar* __restrict dst, int dstPitch,
+    __global const PX* __restrict base,
+    __global const PX* __restrict sref,
+    __global const PX* __restrict mref,
+    int width, int height, int pitch, int threshM, int threshS, int threshLS)
+{
+    int x = (int)get_global_id(0);
+    int y = (int)get_global_id(1);
+    if (x < width && y < height) {
+        int a = (int)base[x + (y - 1) * pitch];
+        int b = (int)sref[x + y * pitch];
+        int c = (int)base[x + y * pitch];
+        int d = (int)sref[x + (y + 1) * pitch];
+        int e = (int)base[x + (y + 1) * pitch];
+        int t = kf_calc_combe_val(a, b, c, d, e);
+        int diff = (int)mref[x + y * pitch] - c;
+        if (diff < 0) diff = -diff;
+        int flag = 0;
+        if (t > threshS) flag |= KF_SHIMA;
+        if (t > threshLS) flag |= KF_LSHIMA;
+        if (diff > threshM) flag |= KF_MOVE;
+        dst[x + y * dstPitch] = (uchar)flag;
     }
 }

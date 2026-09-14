@@ -35,6 +35,7 @@ test: ref lint
 	python3 python/run_kfm_deblock.py
 	python3 python/run_kfm_deblock_qp.py
 	python3 python/run_kfm_combinganalyze.py
+	python3 python/run_kfm_decombeucf.py
 
 clean:
 	rm -rf build

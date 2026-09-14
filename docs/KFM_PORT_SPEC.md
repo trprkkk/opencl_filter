@@ -21,7 +21,7 @@ KTGMC kernels were. KDeband was chosen first (see docs/PORT_PLAN.md §5).
 | `KFMKernel.cu` | `KPatchCombe`, `KFMSwitch`, `KFMPad`, `KFMDecimate`, `AssumeDevice` | inventoried: host-only, no device kernels (see below; its only kernel dep `kl_merge` is ported as `kf_merge_block`) |
 | `CombingAnalyze.cu` | `KFMSuper`, `KCleanSuper`, `KPreCycleAnalyze(_Show)`, `KFMSuperShow`, `KTelecine(_Super)`, `KSwitchFlag`, `KContainsCombe`, `KCombeMask`, `KRemoveCombe` | not started |
 | `Deblock.cu` | `KDeblock`, `QPClip`, `ShowQP`, `FrameType` | **all 11 device kernels transcribed** (`kf_deblock`, `kf_make_qp_table`, `kf_deblock_show` ALG-VERIFIED; `kf_merge_deblock`, `kf_max_vh/v/h`, `kf_scale_qp`, `kf_sharpen_coeff`, `kf_sharpen`, `kf_show_sharpen_coeff` in the separate provisional `kfm_deblock_rig.cl`, `// RIG-VERIFY`, handoff spec in `docs/RIG_HANDOFF_KDEBLOCK.md`; QPClip is a no-op pass-through) |
-| `DecombeUCF.cu` | `KCFieldDiff`, `KCFrameDiffDup`, `KNoiseClip`, `KAnalyzeNoise`, `KDecombUCF*` | **KNoiseClip done** (see below) |
+| `DecombeUCF.cu` | `KCFieldDiff`, `KCFrameDiffDup`, `KNoiseClip`, `KAnalyzeNoise`, `KDecombUCF*` | **device kernels 8/8 done** (KNoiseClip + 7 reductions, see below; only host pipelines remain) |
 | `MergeStatic.cu` | `KTemporalDiff`, `KAnalyzeStatic`, `KMergeStatic` | **all 6 pipeline kernels done** (KDeband.cu-style core; KAnalyzeStatic host glue in `kfm_filterbase.cl`/`kfm_mergestatic.cl`) |
 
 ## Verified
@@ -335,6 +335,28 @@ vs an independent Python golden over nmin/range sweeps). Y uses `nmin_y`/
 `range_y`; U,V use `nmin_uv`/`range_uv`. (Host requires plane width %4==0 — the
 scalar port is exact for any width.)
 
+### DecombeUCF reductions (`kfm_decombeucf.cl`, 7 kernels)
+
+The remaining `__global__` kernels of DecombeUCF.cu (after `kl_noise_clip`
+above): `kf_init_uint64`, `kf_calculate_field_diff` (gated 5-tap
+`CalcCombe(a,b,c,d,e) = abs(a+c*4+e-(b+d)*3)` sum over a ±2-row padded plane,
+8/16-bit), `kf_init_block_sum`, `kf_add_block_sum` (per-block
+sumAbs/sumSig with `BLOCK_SIZE` 4/8/16/32 as a runtime arg, 8/16-bit),
+`kf_block_sum_max` (per-cell `sumAbs+sumSig*4` max over interleaved int
+quads, 0-floored), `kf_analyze_noise` (4-way `|.-128|`/`|delta|` census,
+8-bit), `kf_analyze_diff` (combe sum0 + field-mixed TFF sum1, 8-bit).
+Upstream's warp-shuffle `dev_reduce`/`dev_reduceN` trees become full
+`__local` halving trees (int add/max are associative and commutative, so
+every tree shape is value-identical); the `+=`/`atomicAdd`/`atomicMax`
+accumulation onto init values is preserved, including the 64-bit result
+accumulators (`// RIG-VERIFY`: needs `cl_khr_int64_base_atomics` or OpenCL
+2.0 atomics on device; the 32×16 reduce kernels require local size 32×16).
+Together with `kf_noise_clip`, all 8 DecombeUCF.cu device kernels are
+ported — only the multi-clip host pipelines (`KDecombUCF*`) remain.
+`// ALG-VERIFIED` via `python/run_kfm_decombeucf.py` (810 cases: CPU
+mirror `sim/kfm_decombeucf_ref.cpp` vs an independent Python golden,
+integer-exact, nonzero-init accumulation and padded-plane crafts covered).
+
 ### `KDeblock` core (kf_deblock, src/opencl/kfm/kernels/kfm_deblock.cl)
 
 The heart of the KDeblock deblocking filter (`kl_deblock` in Deblock.cu), a
@@ -530,8 +552,9 @@ layouts, the 1/3-fold constant, unwritten flag borders).
   packaged for handoff in `docs/RIG_HANDOFF_KDEBLOCK.md` — six are future
   ALG-VERIFY candidates under the mirror+golden method, while the sharpen
   pair additionally mandates a device run.
-- Remaining KFM families: the rest of DecombeUCF.cu (KDecombUCF* — heavy
-  multi-clip host pipelines; KNoiseClip is done). Deblock QPClip is a pure
+- Remaining KFM families: the DecombeUCF.cu host pipelines (KDecombUCF* —
+  heavy multi-clip sequencing; all 8 device kernels are done: KNoiseClip +
+  the 7 reductions in kfm_decombeucf.cl). Deblock QPClip is a pure
   host/props filter with no device kernel
   (FrameType is CPU-only); ShowQP's kernel `kl_scale_qp` is transcribed
   (`kf_scale_qp`, `// RIG-VERIFY`), its frame-assembly is host.

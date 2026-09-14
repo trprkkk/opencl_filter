@@ -167,6 +167,15 @@ Makefile                       # make test  (no OpenCL required)
   nmin, range)` (128 == equal). Driven by one per-plane kernel, so it is
   kernel-complete (only AviSynth host glue remains). **ALG-VERIFIED** via
   `python/run_kfm_noiseclip.py` (300 cases, integer-exact, nmin/range sweeps).
+- `kfm_decombeucf.cl`: **KFM DecombeUCF reductions (7/7 remaining kernels)** —
+  `kf_init_uint64`, `kf_calculate_field_diff`, `kf_init_block_sum`,
+  `kf_add_block_sum` (BLOCK_SIZE 4/8/16/32), `kf_block_sum_max`,
+  `kf_analyze_noise`, `kf_analyze_diff` (KFM/DecombeUCF.cu, MIT): gated 5-tap
+  combe sums, per-block sumAbs/sumSig accumulation, and the analyze-noise/
+  diff census with uint64 atomics. Together with `kf_noise_clip`, all 8
+  DecombeUCF.cu device kernels are ported (only multi-clip host pipelines
+  remain). **ALG-VERIFIED** via `python/run_kfm_decombeucf.py` (810 cases,
+  integer-exact).
 - `kfm_combinganalyze.cl`: **KFM CombingAnalyze, complete (15/15 kernels)** —
   `kf_copy_first`, `kf_combe_to_flag`, `kf_sum_box3x3`, `kf_binary_flag`,
   `kf_bilinear_h/v`, `kf_temporal_soften` (float32, exhaustive t sweep),

@@ -195,6 +195,11 @@ To get a working deinterlacer you must port the mvtools-equivalent layers:
   `kf_clean_super`, `kf_contains_durty_block` + the 8-tap helpers) plus the
   KFMSuper block analyzer `kf_super_analyze` and the FMCount census
   `kf_init_fmcount`/`kf_count_cmflags`/`kf_count_cmflags_2planes`.
+  The **DecombeUCF reductions** (`kf_init_uint64`,
+  `kf_calculate_field_diff`, `kf_init_block_sum`, `kf_add_block_sum`,
+  `kf_block_sum_max`, `kf_analyze_noise`, `kf_analyze_diff`, in
+  `kfm_decombeucf.cl`) are ALG-VERIFIED too (810 cases, integer-exact),
+  completing all 8 DecombeUCF.cu device kernels alongside `kf_noise_clip`.
   The **KDeblock core** `kf_deblock` (Deblock.cu `kl_deblock`,
   in `kfm_deblock.cl`) is ALG-VERIFIED too: the fixed float32 8×8 DCT/
   hard-threshold/IDCT deblocking stage, bit-exact vs an independent float32
@@ -208,8 +213,8 @@ To get a working deinterlacer you must port the mvtools-equivalent layers:
   by `make test`, handoff spec in `docs/RIG_HANDOFF_KDEBLOCK.md`); all 11
   Deblock.cu device kernels are transcribed, with only host sequencing and
   rig proofs remaining open.
-  Full KFM map + next candidates (CombingAnalyze / remaining DecombeUCF /
-  Deblock helpers) are in `docs/KFM_PORT_SPEC.md`.
+  Full KFM map + next candidates (DecombeUCF host pipelines / Deblock
+  helpers) are in `docs/KFM_PORT_SPEC.md`.
 
 ## 6. AviSynth integration (device glue)
 

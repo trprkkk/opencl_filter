@@ -70,7 +70,10 @@ static int _gi[3], _li[3], _gid[3], _ls[3], _ng[3];
 #define convert_float_rtz(x)  ((float)(x))
 
 #define ATOMIC_FUNC_IMPL(T) \
-static T atomic_add(__global T* p, T v){ return __sync_fetch_and_add(p,v);} \
 static T atomic_xchg(__global T* p, T v){ return __sync_lock_test_and_set(p,v);}
 #define ATOMIC_FUNCS ATOMIC_FUNC_IMPL(int)
 ATOMIC_FUNCS
+/* macro (not overloaded fns — C has no overloading): parses for both int and
+ * unsigned long args, matching the OpenCL atomic_add builtin's call shape. */
+#define atomic_add(p, v) (__sync_fetch_and_add((p), (v)))
+static int atomic_max(__global int* p, int v){ return __sync_fetch_and_max(p,v);}

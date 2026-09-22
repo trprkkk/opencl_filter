@@ -21,6 +21,12 @@
  *                  -> output width*height (interior)
  *     V max_v    : V ... same; dst = max over [y+-radius].
  *     B max_vh   : B ... same; dst = max over the (2R+1)^2 box.
+ *     G merge    : G vis_w vis_h tmp_pitch_u4 tmp_ipitch_rows out_pitch
+ *                  shift maxv  nT  tmp(nT); tmp is the padded accumulator
+ *                  (pitch_ushort = 4*tmp_pitch_u4, +8 ushort / +8 row host
+ *                  pre-offset applied inside); per-pixel 4-slice float32
+ *                  merge with Bayer dither, fmin(maxv), truncation.
+ *                  -> output vis_w*vis_h
  */
 #include <cstdio>
 #include <cstdlib>
@@ -43,6 +49,19 @@ static int norm_qscale(int qscale, int type) {
 }
 
 /* Upstream g_sharpen_coeff (Deblock.cu), byte-verified by diff. */
+/* Upstream g_ldither (Deblock.cu), byte-verified by diff; indexed
+ * [y&7][X&1][L] with X = x>>2 over ushort4 columns. */
+static const int LDITHER[8][2][4] = {
+  { {  0,  48,  12,  60 }, {  3,  51,  15,  63 } },
+  { { 32,  16,  44,  28 }, { 35,  19,  47,  31 } },
+  { {  8,  56,   4,  52 }, { 11,  59,   7,  55 } },
+  { { 40,  24,  36,  20 }, { 43,  27,  39,  23 } },
+  { {  2,  50,  14,  62 }, {  1,  49,  13,  61 } },
+  { { 34,  18,  46,  30 }, { 33,  17,  45,  29 } },
+  { { 10,  58,   6,  54 }, {  9,  57,   5,  53 } },
+  { { 42,  26,  38,  22 }, { 41,  25,  37,  21 } },
+};
+
 static const int SHARPEN_COEFF[30] = {
     0, 0, 0, 0, 0,
     0, 0, 0, 0, 10,
@@ -116,6 +135,35 @@ int main(int argc, char** argv) {
                         }
                 }
                 out.push_back(best);
+            }
+        }
+    } else if (mode == 'G') {
+        long long vis_w = g_p(v, i), vis_h = g_p(v, i);
+        long long pitch_u4 = g_p(v, i), ipitch = g_p(v, i);
+        long long out_pitch = g_p(v, i), shift = g_p(v, i);
+        long long maxv_i = g_p(v, i), nT = g_p(v, i);
+        std::vector<long long> tmp((size_t)nT);
+        for (long long k = 0; k < nT; k++) tmp[(size_t)k] = g_p(v, i);
+        (void)out_pitch; /* shape-only: output is packed row-major */
+        long long pitch_us = pitch_u4 * 4;
+        long long org = 8 + 8 * pitch_us; /* host pre-offset: +2 u4, +8 rows */
+        float maxv = (float)maxv_i;
+        float inv = 1.0f / (float)(1 << (int)shift);
+        const float sixth = 1.0f / 64.0f;
+        for (long long y = 0; y < vis_h; y++) {
+            for (long long x = 0; x < vis_w; x++) {
+                long long X = x >> 2, L = x & 3;
+                int sum = 0;
+                for (int k = 0; k < 4; k++) {
+                    long long row = ipitch * k + y;
+                    sum += (int)tmp[(size_t)(org +
+                        (((X + row * pitch_u4) << 2) + L))];
+                }
+                int d = LDITHER[y & 7][X & 1][L];
+                /* upstream op order, verbatim; -ffp-contract=off, no FMA */
+                float vv = (float)sum * inv + (float)d * sixth;
+                vv = vv < maxv ? vv : maxv; /* fmin (no NaN: inputs >= 0) */
+                out.push_back((int)vv); /* C truncation; in [0,maxv] */
             }
         }
     } else {

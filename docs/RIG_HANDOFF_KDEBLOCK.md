@@ -8,8 +8,8 @@ original author anything.
 ## 0. TL;DR
 
 - **Package under verification:** `src/opencl/kfm/kernels/kfm_deblock_rig.cl`
-  (8 kernels + 2 tables at handoff, all `// RIG-VERIFY`; 5 kernels + 1 table
-  have since graduated — 3 kernels + 1 table remain — deliberately separated from the
+  (8 kernels + 2 tables at handoff, all `// RIG-VERIFY`; 6 kernels + 2 tables
+  have since graduated — only the 2 sharpen kernels remain — deliberately separated from the
   verified `kfm_deblock.cl`).
 - **Ground truth:** `rigaya/AviSynthCUDAFilters`, `KFM/Deblock.cu`, commit
   `cceb8da0e623e6bf5eea2cf655b06d4428e1600b` (§2).
@@ -29,7 +29,7 @@ original author anything.
 
 | # | OpenCL kernel | CUDA device twin | Exact CPU twin? | Difficulty |
 |---|---|---|---|---|
-| 1 | `kf_merge_deblock` | `kl_merge_deblock` | `cpu_merge_deblock` (exact) | hard (float32 + layout proof) |
+| 1 | `kf_merge_deblock` | `kl_merge_deblock` | `cpu_merge_deblock` (exact) | hard (float32 + layout proof) — **GRADUATED** |
 | 2 | `kf_max_vh` | `kl_max_vh` | none (device-only upstream) | medium (pad contract) — **GRADUATED** |
 | 3 | `kf_max_v` | `kl_max_v` | `cpu_max_v` (exact) | easy-medium — **GRADUATED** |
 | 4 | `kf_max_h` | `kl_max_h` | `cpu_max_h` (exact) | easy — **GRADUATED** |
@@ -159,7 +159,7 @@ Float rules (from the KDeblock/KEdgeLevel/KTemporalNR precedents):
 
 ## 4. Per-kernel specification
 
-### 4.1 `kf_merge_deblock` (hardest — do last)
+### 4.1 `kf_merge_deblock` — **GRADUATED**
 
 Signature (grid: 2D `(vis_width, vis_height)` **pixels**):
 

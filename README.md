@@ -19,7 +19,7 @@ buffers and dispatches them, with a scalar CPU reference used for validation.
 |---|---|---|
 | **KTGMC** | QTGMC-style deinterlacer (motion compensated) | In progress — **Milestone 1 done** (see below) |
 | KNNEDI3 | NNEDI3 neural-net upscaler | not started (next candidate) |
-| KFM | filter family (KDeband, Deblock, CombingAnalyze, …) | **KDeband/KEdgeLevel/KTemporalNR + MergeStatic/KAnalyzeStatic/KNoiseClip + KDeblock done** (core/qp-table/show/max/scale/sharpen-coeff ALG-VERIFIED; merge/sharpen-pair in provisional `kfm_deblock_rig.cl`, `// RIG-VERIFY`) (`src/opencl/kfm/kernels/`) |
+| KFM | filter family (KDeband, Deblock, CombingAnalyze, …) | **KDeband/KEdgeLevel/KTemporalNR + MergeStatic/KAnalyzeStatic/KNoiseClip + KDeblock done** (core/qp-table/show/max/scale/sharpen-coeff/merge ALG-VERIFIED; sharpen-pair in provisional `kfm_deblock_rig.cl`, `// RIG-VERIFY`) (`src/opencl/kfm/kernels/`) |
 | AvsCUDA / GRunT / masktools | CUDA-aware dispatch + helpers | out of scope unless requested |
 
 A faithful KTGMC port is large: `KTGMC/Kernel.cu` (~3,560 lines) + `MVKernel.cu`
@@ -198,13 +198,14 @@ Makefile                       # make test  (no OpenCL required)
   `sim/kfm_deblock_ref.cpp` + float32-exact golden) and
   `python/run_kfm_deblock_qp.py` (make_qp_table + deblock_show, 200+200 cases,
   vs `sim/kfm_deblock_qp_ref.cpp`) — bit-exact. Graduated from the rig file:
-  the DC-mask dilation `kf_max_vh/v/h`, the ShowQP scaler `kf_scale_qp` and
-  the sharpen LUT `kf_sharpen_coeff`, **ALG-VERIFIED** via
-  `python/run_kfm_deblock_aux.py` (850 cases vs `sim/kfm_deblock_aux_ref.cpp`).
-  The remaining members — the Bayer accumulator merge `kf_merge_deblock`
-  (+`g_ldither`) and the SharpenFilter pair `kf_sharpen` /
+  the DC-mask dilation `kf_max_vh/v/h`, the ShowQP scaler `kf_scale_qp`, the
+  sharpen LUT `kf_sharpen_coeff` and the Bayer accumulator merge
+  `kf_merge_deblock` (+`g_ldither`), **ALG-VERIFIED** via
+  `python/run_kfm_deblock_aux.py` (1120 cases vs `sim/kfm_deblock_aux_ref.cpp`,
+  incl. merge end-to-end + layout proofs).
+  The remaining member — the SharpenFilter pair `kf_sharpen` /
   `kf_show_sharpen_coeff` (manual bilinear replacing the CUDA texture fetch;
-  device-run comparison mandatory) — live separately in `kfm_deblock_rig.cl`
+  device-run comparison mandatory) — lives separately in `kfm_deblock_rig.cl`
   as faithful `// RIG-VERIFY` transcriptions (bannered PROVISIONAL/UNVERIFIED,
   not covered by `make test`); all 11 Deblock.cu device kernels are now
   transcribed, with the host sequencing and rig proofs remaining open.

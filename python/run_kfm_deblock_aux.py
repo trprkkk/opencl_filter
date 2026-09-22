@@ -1,17 +1,20 @@
 """Independent golden vs sim/kfm_deblock_aux_ref.cpp (graduated KDeblock helpers).
 
-Modes: S scale_qp, C sharpen_coeff, H max_h, V max_v, B max_vh.  The B golden
+Modes: S scale_qp, C sharpen_coeff, H max_h, V max_v, B max_vh, G merge.
+The B golden
 is the separable composition max_h o max_v (box-max separability), which
 cross-checks the direct box form in the mirror per the handoff recipe.
 """
 import os
 import random
+import struct
 import subprocess
 import sys
 import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BIN = os.path.join(tempfile.gettempdir(), "kfm_deblock_aux_ref")
+BIN_DB = os.path.join(tempfile.gettempdir(), "kfm_deblock_ref_e2e")
 
 SHARPEN_COEFF = [
     0, 0, 0, 0, 0,
@@ -20,6 +23,26 @@ SHARPEN_COEFF = [
     170, 180, 190, 200, 210,
     220, 230, 240, 245, 250,
     255, 255, 255, 255, 255,
+]
+
+
+def F(v):
+    return struct.unpack('f', struct.pack('f', v))[0]
+
+
+def FI(v):
+    return struct.unpack('i', struct.pack('f', v))[0]
+
+
+LDITHER = [
+    [[0, 48, 12, 60], [3, 51, 15, 63]],
+    [[32, 16, 44, 28], [35, 19, 47, 31]],
+    [[8, 56, 4, 52], [11, 59, 7, 55]],
+    [[40, 24, 36, 20], [43, 27, 39, 23]],
+    [[2, 50, 14, 62], [1, 49, 13, 61]],
+    [[34, 18, 46, 30], [33, 17, 45, 29]],
+    [[10, 58, 6, 54], [9, 57, 5, 53]],
+    [[42, 26, 38, 22], [41, 25, 37, 21]],
 ]
 
 
@@ -71,6 +94,38 @@ def golden_max_v(width, height, pitch, radius, src, org):
             for y in range(height) for x in range(width)]
 
 
+def run_deblock_mirror(nums):
+    inf = os.path.join(tempfile.gettempdir(), "kdx_db_in.txt")
+    outf = os.path.join(tempfile.gettempdir(), "kdx_db_out.txt")
+    with open(inf, "w") as f:
+        f.write(" ".join(map(str, nums)) + "\n")
+    subprocess.run([BIN_DB, inf, outf], check=True)
+    with open(outf) as f:
+        return [int(line) for line in f]
+
+
+def golden_merge(vis_w, vis_h, pitch_u4, ipitch, shift, maxv, tmp):
+    # packed-quad addressing from the CUDA form (quad (X, row) holds lanes
+    # (X + row*pitch_u4)*4 + L); float32 per op; fmin; C truncation.
+    pitch_us = pitch_u4 * 4
+    org = 8 + 8 * pitch_us
+    inv = F(1.0 / float(1 << shift))
+    sixth = F(1.0 / 64.0)
+    maxv_f = F(float(maxv))
+    out = []
+    for y in range(vis_h):
+        for x in range(vis_w):
+            X = x >> 2
+            L = x & 3
+            s = 0
+            for k in range(4):
+                row = ipitch * k + y
+                s += tmp[org + (X + row * pitch_u4) * 4 + L]
+            v = F(F(F(float(s)) * inv) + F(F(float(LDITHER[y & 7][X & 1][L])) * sixth))
+            out.append(int(v if v < maxv_f else maxv_f))
+    return out
+
+
 def golden_max_vh_sep(width, height, pitch, radius, src, org):
     # separable composition: horizontal pass over interior columns and the
     # radius-halo rows (the only cells the vertical pass consumes), then a
@@ -91,6 +146,9 @@ def main():
     subprocess.run(["g++", "-O2", "-std=c++17", "-ffp-contract=off", "-w",
                     os.path.join(REPO, "sim", "kfm_deblock_aux_ref.cpp"),
                     "-o", BIN], check=True)
+    subprocess.run(["g++", "-O2", "-std=c++17", "-ffp-contract=off", "-w",
+                    os.path.join(REPO, "sim", "kfm_deblock_ref.cpp"),
+                    "-o", BIN_DB], check=True)
     rng = random.Random(131)
     ok = True
     total = 0
@@ -191,8 +249,155 @@ def main():
             exp = golden_max_vh_sep(width, height, pitch, radius, src, org)
         check(mode, run_mirror(nums), exp, (width, height, radius))
 
-    print("KFM KDeblock aux (scale_qp/sharpen_coeff/max_h/max_v/max_vh): "
-          "PASS (%d cases)" % total)
+    # G: merge_deblock (vis_w mult of 4; vis_h <= ipitch; shift/maxv from
+    # quality 1..6 x bits 8/10/12/16; margins carry distinctive sentinels so
+    # a wrong +8/+8 pre-offset would corrupt the result)
+    for t in range(250):
+        bits = rng.choice([8, 10, 12, 16])
+        maxv = (1 << bits) - 1
+        quality = rng.randint(1, 6)
+        dbs = max(0, quality + bits - 10)
+        shift = quality + 6 - dbs
+        ipitch = 8 * rng.choice([1, 1, 2, 3])
+        vis_w = rng.choice([4, 8, 12, 16, 20, 24, 32, 36, 40, 44, 48])
+        vis_h = rng.randint(1, ipitch)
+        pitch_us = 8 + vis_w + rng.choice([0, 0, 1, 2, 3])
+        pitch_us += (-pitch_us) % 4
+        pitch_u4 = pitch_us // 4
+        rows = 8 + 4 * ipitch + rng.choice([0, 1])
+        nT = pitch_us * rows
+        org = 8 + 8 * pitch_us
+        craft = t % 7
+        if craft == 0:
+            tmp = [rng.randint(0, 65535) for _ in range(nT)]
+        elif craft == 1:  # zeros -> dither-only path, all outputs 0
+            tmp = [0] * nT
+        elif craft == 2:  # maxed acc -> fmin clamp pins
+            tmp = [65535] * nT
+        elif craft == 3:  # single-cell spike pins k/X/L/y at once
+            tmp = [0] * nT
+            k = rng.randrange(4)
+            sx = rng.randrange(vis_w)
+            sy = rng.randrange(vis_h)
+            tmp[org + sx + (ipitch * k + sy) * pitch_us] = rng.randint(1, 65535)
+        elif craft == 4:  # single-quad spike pins lane/column fan-out
+            tmp = [0] * nT
+            X0 = rng.randrange(vis_w // 4)
+            k = rng.randrange(4)
+            sy = rng.randrange(vis_h)
+            for L in range(4):
+                tmp[org + (X0 * 4 + L) + (ipitch * k + sy) * pitch_us] = \
+                    rng.randint(1, 65535)
+        elif craft == 5:  # uniform slices summing to 64k+63 at shift 6:
+            # outputs flip k0 vs k0+1 exactly where dither >= 1, pinning
+            # all three dither indices plus the float boundary
+            bits = 10
+            maxv = 1023
+            shift = 6  # quality+6-(quality+0) for bits=10, any quality
+            k0 = rng.choice([0, 1, 2])
+            c = [16 + 16 * k0] * 3 + [15 + 16 * k0]
+            tmp = [rng.randint(0, 65535) for _ in range(nT)]
+            for k in range(4):
+                for yy in range(4 * ipitch):
+                    for xx in range(vis_w):
+                        tmp[org + xx + (ipitch * k + yy % ipitch) * pitch_us] = c[k]
+            for yy in range(vis_h, ipitch):  # keep unused rows distinctive
+                for k in range(4):
+                    for xx in range(vis_w):
+                        tmp[org + xx + (ipitch * k + yy) * pitch_us] = \
+                            rng.randint(0, 65535)
+        else:  # sparse spikes on zero field
+            tmp = [0] * nT
+            for _ in range(20):
+                k = rng.randrange(4)
+                sx = rng.randrange(vis_w)
+                sy = rng.randrange(vis_h)
+                tmp[org + sx + (ipitch * k + sy) * pitch_us] = rng.randint(1, 65535)
+        if craft != 5:
+            for r in range(8):  # top-margin sentinels
+                for c in range(pitch_us):
+                    tmp[c + r * pitch_us] = rng.randint(0, 65535)
+            for r in range(8, rows):  # left-margin sentinels
+                for c in range(8):
+                    tmp[c + r * pitch_us] = rng.randint(0, 65535)
+        nums = ["G", vis_w, vis_h, pitch_u4, ipitch, vis_w, shift, maxv, nT] + tmp
+        check("G", run_mirror(nums),
+              golden_merge(vis_w, vis_h, pitch_u4, ipitch, shift, maxv, tmp),
+              (vis_w, vis_h, shift, maxv, craft))
+
+    # E2E (handoff section 4.1/section 5): real kf_deblock accumulator fed to
+    # the merge mirror with tmp_pitch_u4 = acc_pitch_ushort >> 2, compared
+    # against the packed-quad golden.  Unwritten (-1) mirror cells map to 0
+    # (production tmpOut is written fully over the visible region; the vis
+    # window stays inside written cols [0, bw*8+8)).
+    for t in range(15):
+        bits = rng.choice([8, 10, 12, 16])
+        maxvpx = (1 << bits) - 1
+        bw = rng.choice([1, 2])
+        bh = rng.choice([1, 2])
+        quality = rng.choice([1, 2, 3])
+        dbs = max(0, quality + bits - 10)
+        mshift = quality + 6 - dbs
+        mmaxv = (1 << bits) - 1
+        deblock_maxv = (1 << (bits + 6 - dbs)) - 1
+        sw = bw * 8 + 16
+        sh = bh * 8 + 16
+        src = [rng.randint(0, maxvpx) for _ in range(sh * sw)]
+        qp = [rng.randint(0, 40) for _ in range(bw * bh)]
+        strength = F(rng.choice([4.0, 8.0, 20.0]))
+        ta = F(rng.choice([0.02, 0.05, 0.08]))
+        tb = F(rng.choice([-1.0, -0.5, 0.0]))
+        out_pitch = sw
+        hdr = [68, sw, sh, bh, out_pitch, bw, (1 << quality) - 1, dbs,
+               deblock_maxv, FI(strength), FI(ta), FI(tb), bw, bw * bh]
+        acc = run_deblock_mirror(hdr + qp + [sh * sw] + src)
+        rows_acc = 32 * bh + 8
+        assert len(acc) == out_pitch * rows_acc, (len(acc), out_pitch, rows_acc)
+        ipitch = 8 * bh
+        vis_w = 4 * rng.randint(1, (bw * 8 + 8) // 4)
+        vis_h = rng.randint(1, 8 * bh)
+        pitch_us = 8 + out_pitch
+        assert pitch_us % 4 == 0
+        pitch_u4 = pitch_us // 4
+        rows = 8 + rows_acc
+        nT = pitch_us * rows
+        tmp = [rng.randint(0, 65535) for _ in range(nT)]
+        for r in range(rows_acc):
+            for c in range(out_pitch):
+                a = acc[c + r * out_pitch]
+                tmp[(8 + c) + (8 + r) * pitch_us] = a if a >= 0 else 0
+        nums = ["G", vis_w, vis_h, pitch_u4, ipitch, vis_w, mshift, mmaxv, nT] + tmp
+        check("E", run_mirror(nums),
+              golden_merge(vis_w, vis_h, pitch_u4, ipitch, mshift, mmaxv, tmp),
+              (bw, bh, quality, bits))
+
+    # section 5 packing identity: CUDA packed-ushort2 writes == scalar ushort
+    # writes when the byte stride matches (P = 2*P2), incl. the tile index
+    # correspondence (bbx*4+tx)*2+j == bbx*8+2*tx+j.  Distinctive values.
+    for t in range(5):
+        W2 = rng.choice([4, 8, 16, 32])
+        H = rng.choice([1, 2, 8, 16])
+        P2 = W2 + rng.choice([0, 1, 2])
+        P = 2 * P2
+        assert P * H <= 65536
+        def v(r, i):
+            return (r * P + i) * 3 + 1
+        scalar = [v(r, i) for r in range(H) for i in range(2 * W2)]
+        words = [0] * (P2 * H)
+        for r in range(H):  # emulate CUDA packed ushort2 writes
+            for u in range(W2):
+                words[r * P2 + u] = v(r, 2 * u) | (v(r, 2 * u + 1) << 16)
+        back = []
+        for r in range(H):  # unpack little-endian, read as scalar ushorts
+            for u in range(W2):
+                w = words[r * P2 + u]
+                back += [w & 0xFFFF, (w >> 16) & 0xFFFF]
+        idx_ok = all((bbx * 4 + tx) * 2 + j == bbx * 8 + 2 * tx + j
+                     for bbx in range(8) for tx in range(8) for j in range(2))
+        check("L", back + [1 if idx_ok else 0], scalar + [1], (W2, H, P2))
+
+    print("KFM KDeblock aux (scale_qp/sharpen_coeff/max_h/max_v/max_vh/"
+          "merge_deblock+e2e): PASS (%d cases)" % total)
     sys.exit(0 if ok else 1)
 
 

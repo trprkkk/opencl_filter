@@ -15,11 +15,12 @@
  *   kf_max_vh/v/h     kl_max_vh/v/h twins (DC-mask dilation)
  *   kf_scale_qp       kl_scale_qp twin (ShowQP rescaler)
  *   kf_sharpen_coeff  kl_sharpen_coeff twin (QP -> sharpen LUT)
- * plus the kf_norm_qscale helper, the g_deblock_offset tables (g_offx/g_offy)
- * and the g_sharpen_coeff LUT.  The remaining KDeblock-family transcriptions
- * (kf_merge_deblock, kf_sharpen, kf_show_sharpen_coeff) are // RIG-VERIFY and
- * live separately in kfm_deblock_rig.cl — see docs/RIG_HANDOFF_KDEBLOCK.md
- * for their verification handoff spec.
+ *   kf_merge_deblock  kl_merge_deblock twin (Bayer accumulator merge)
+ * plus the kf_norm_qscale helper, the g_deblock_offset tables (g_offx/g_offy),
+ * the g_sharpen_coeff LUT and the g_ldither Bayer table.  The remaining
+ * KDeblock-family transcriptions (kf_sharpen, kf_show_sharpen_coeff) are
+ * // RIG-VERIFY and live separately in kfm_deblock_rig.cl — see
+ * docs/RIG_HANDOFF_KDEBLOCK.md for their verification handoff spec.
  *
  * Kernel math (per block (bx,by), a faithful scalar transcription of
  * kl_deblock; channels/pixels are independent):
@@ -500,4 +501,60 @@ kernel void kf_sharpen_coeff(
 
     int q = ((int)qp[x + y * qp_pitch]) >> 3;
     dst[x + y * pitch] = (q >= 25) ? (uchar)255 : g_sharpen_coeff[q];
+}
+
+/* Bayer-ordered dither matrix (Deblock.cu g_ldither[8][2], each an uchar4),
+ * flattened per lane.  The scalar merge kernel indexes [y&7][(x>>2)&1][x&3]:
+ * note the middle index runs over ushort4 columns, NOT scalar pixels;
+ * byte-verified by mechanical diff vs upstream). */
+static const uchar g_ldither[8][2][4] = {
+  { {  0,  48,  12,  60 }, {  3,  51,  15,  63 } },
+  { { 32,  16,  44,  28 }, { 35,  19,  47,  31 } },
+  { {  8,  56,   4,  52 }, { 11,  59,   7,  55 } },
+  { { 40,  24,  36,  20 }, { 43,  27,  39,  23 } },
+  { {  2,  50,  14,  62 }, {  1,  49,  13,  61 } },
+  { { 34,  18,  46,  30 }, { 33,  17,  45,  29 } },
+  { { 10,  58,   6,  54 }, {  9,  57,   5,  53 } },
+  { { 42,  26,  38,  22 }, { 41,  25,  37,  21 } },
+};
+
+/* ---------------------------------------------------------------------------
+ * kf_merge_deblock — merge the 16-bit block-parity accumulator into the final
+ * plane (kl_merge_deblock / cpu_merge_deblock twin).  Per visible pixel:
+ *   sum = acc[slice0] + acc[slice1] + acc[slice2] + acc[slice3]   (int)
+ *   v   = (float)sum * (1/(1<<shift)) + (float)dither * (1/64)
+ *   out = (PX)fmin(v, maxv)                              (C-truncation cast)
+ * where dither = g_ldither[y&7][(x>>2)&1][x&3] and shift = mergeShift =
+ * quality+6-deblockShift, maxv = (1<<bits)-1.  The 4 parity slices are stacked
+ * vertically with tmp_ipitch_rows rows each (bh*8); tmp_pitch_u4 is the
+ * accumulator pitch in ushort4 units (= acc_pitch_ushort >> 2); the tmp base
+ * is pre-offset by (+8 ushorts, +8 rows) exactly as the CUDA host passes
+ * tmpOut+2+8*pitch.  Grid: 2D (vis_width, vis_height) pixels; vis_width must
+ * be a multiple of 4 (CUDA covers width>>2 uchar4/ushort4 lanes, i.e. the
+ * width&~3 left pixels; pass vis_width = width & ~3).
+ * // ALG-VERIFIED via python/run_kfm_deblock_aux.py (250 merge + 15 end-to-end
+ * // + 5 layout cases): quality 1..6 x bits 8/10/12/16, spike crafts pinning the
+ * // k/X/L summation, dither-boundary flips pinning [y&7][X&1][L], and the
+ * // handoff section-5 packing identity (packed ushort2 == scalar ushort).
+ * -------------------------------------------------------------------------*/
+kernel void kf_merge_deblock(
+    __global const ushort* __restrict tmp, int tmp_pitch_u4, int tmp_ipitch_rows,
+    __global PX* __restrict out, int out_pitch,
+    int vis_width, int vis_height, int shift, float maxv)
+{
+    int x = (int)get_global_id(0);
+    int y = (int)get_global_id(1);
+    if (x >= vis_width || y >= vis_height) return;
+
+    int X = x >> 2;   /* ushort4 column (dither middle index runs over this) */
+    int L = x & 3;    /* lane within the ushort4 */
+    int sum = 0;
+    for (int k = 0; k < 4; ++k) {
+        int row = tmp_ipitch_rows * k + y;
+        sum += (int)tmp[((X + row * tmp_pitch_u4) << 2) + L];
+    }
+    float v = (float)sum * (1.0f / (float)(1 << shift)) +
+              (float)g_ldither[y & 7][X & 1][L] * (1.0f / 64.0f);
+    v = fmin(v, maxv);
+    out[x + y * out_pitch] = (PX)v;
 }

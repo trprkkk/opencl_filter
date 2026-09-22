@@ -8,7 +8,8 @@ original author anything.
 ## 0. TL;DR
 
 - **Package under verification:** `src/opencl/kfm/kernels/kfm_deblock_rig.cl`
-  (8 kernels + 2 tables, all `// RIG-VERIFY`, deliberately separated from the
+  (8 kernels + 2 tables at handoff, all `// RIG-VERIFY`; 5 kernels + 1 table
+  have since graduated — 3 kernels + 1 table remain — deliberately separated from the
   verified `kfm_deblock.cl`).
 - **Ground truth:** `rigaya/AviSynthCUDAFilters`, `KFM/Deblock.cu`, commit
   `cceb8da0e623e6bf5eea2cf655b06d4428e1600b` (§2).
@@ -29,11 +30,11 @@ original author anything.
 | # | OpenCL kernel | CUDA device twin | Exact CPU twin? | Difficulty |
 |---|---|---|---|---|
 | 1 | `kf_merge_deblock` | `kl_merge_deblock` | `cpu_merge_deblock` (exact) | hard (float32 + layout proof) |
-| 2 | `kf_max_vh` | `kl_max_vh` | none (device-only upstream) | medium (pad contract) |
-| 3 | `kf_max_v` | `kl_max_v` | `cpu_max_v` (exact) | easy-medium |
-| 4 | `kf_max_h` | `kl_max_h` | `cpu_max_h` (exact) | easy |
-| 5 | `kf_scale_qp` | `kl_scale_qp` | `cpu_scale_qp` (exact) | easy |
-| 6 | `kf_sharpen_coeff` | `kl_sharpen_coeff` | `cpu_sharpen_coeff` (exact) | easy |
+| 2 | `kf_max_vh` | `kl_max_vh` | none (device-only upstream) | medium (pad contract) — **GRADUATED** |
+| 3 | `kf_max_v` | `kl_max_v` | `cpu_max_v` (exact) | easy-medium — **GRADUATED** |
+| 4 | `kf_max_h` | `kl_max_h` | `cpu_max_h` (exact) | easy — **GRADUATED** |
+| 5 | `kf_scale_qp` | `kl_scale_qp` | `cpu_scale_qp` (exact) | easy — **GRADUATED** |
+| 6 | `kf_sharpen_coeff` | `kl_sharpen_coeff` | `cpu_sharpen_coeff` (exact) | easy — **GRADUATED** |
 | 7 | `kf_sharpen` | `kl_sharpen` | `cpu_sharpen` (differs: guarded borders, no quirk) | hard (texture gap + quirk — device run required) |
 | 8 | `kf_show_sharpen_coeff` | `kl_show_sharpen_coeff` | `cpu_show_sharpen_coeff` (exact for the manual form) | medium (mirror+golden pins it; device run closes the texture gap) |
 
@@ -214,7 +215,7 @@ mirror with `tmp_pitch_u4 = acc_pitch_ushort >> 2`, and compare against a
 golden that models the CUDA packed indexing directly. If they agree, the
 reconciliation is proven, not just reasoned.
 
-### 4.2 `kf_max_vh` / `kf_max_v` / `kf_max_h`
+### 4.2 `kf_max_vh` / `kf_max_v` / `kf_max_h` — **GRADUATED**
 
 ```c
 kernel void kf_max_vh(v,h)(
@@ -245,7 +246,7 @@ kernel void kf_max_vh(v,h)(
   identity in the golden as a second independent check.
 - All integer, 8-bit only (`uchar` plane) — no PX/16-bit variant needed.
 
-### 4.3 `kf_scale_qp`
+### 4.3 `kf_scale_qp` — **GRADUATED**
 
 ```c
 kernel void kf_scale_qp(int width, int height,
@@ -262,7 +263,7 @@ kernel void kf_scale_qp(int width, int height,
 - Integer, 8-bit only. Sweep `scale_type` 0–3 (and, for robustness, an
   out-of-range type such as 4/7 — both twins fall through to `return qscale`).
 
-### 4.4 `kf_sharpen_coeff`
+### 4.4 `kf_sharpen_coeff` — **GRADUATED**
 
 ```c
 kernel void kf_sharpen_coeff(__global uchar* dst, int width, int height, int pitch,

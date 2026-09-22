@@ -1,0 +1,132 @@
+/* CPU mirror of the graduated KDeblock-helper kernels in
+ * src/opencl/kfm/kernels/kfm_deblock.cl (kf_scale_qp, kf_sharpen_coeff,
+ * kf_max_h, kf_max_v, kf_max_vh).  Twins transcribed from upstream
+ * KFM/Deblock.cu @68aef6e: cpu_scale_qp / cpu_sharpen_coeff / cpu_max_h /
+ * cpu_max_v are exact CPU twins; kf_max_vh transcribes the device-only
+ * kl_max_vh directly (box form; the golden cross-checks it via the separable
+ * max_h o max_v identity).  The g_sharpen_coeff bytes are verified against
+ * upstream by mechanical diff (see docs/RIG_HANDOFF_KDEBLOCK.md section 6).
+ *
+ * Usage: kfm_deblock_aux_ref <in> <out>
+ *   All ints on one line.  Modes:
+ *     S scale_qp : S width height dst_pitch src_pitch scale_type  nS
+ *                  src(nS); dst = norm_qscale(src, type) mod 256.
+ *                  -> output width*height
+ *     C sharpen  : C width height pitch qp_pitch  nQ  qp(nQ);
+ *                  q = qp>>3, dst = (q>=25) ? 255 : LUT[q].
+ *                  -> output width*height
+ *     H max_h    : H width height pitch radius  nP  src(nP); src is the
+ *                  8px/side-padded plane (nP = pitch*(height+16), origin
+ *                  at 8+8*pitch); dst = max over [x+-radius].
+ *                  -> output width*height (interior)
+ *     V max_v    : V ... same; dst = max over [y+-radius].
+ *     B max_vh   : B ... same; dst = max over the (2R+1)^2 box.
+ */
+#include <cstdio>
+#include <cstdlib>
+#include <vector>
+
+static long long g_p(const std::vector<long long>& v, size_t& i) {
+    if (i >= v.size()) { std::fprintf(stderr, "short input\n"); std::exit(1); }
+    return v[i++];
+}
+
+/* Upstream norm_qscale (Deblock.cu), verbatim. */
+static int norm_qscale(int qscale, int type) {
+    switch (type) {
+    case 0: return qscale << 2;
+    case 1: return qscale << 1;
+    case 2: return qscale;
+    case 3: return (63 - qscale + 2);
+    }
+    return qscale;
+}
+
+/* Upstream g_sharpen_coeff (Deblock.cu), byte-verified by diff. */
+static const int SHARPEN_COEFF[30] = {
+    0, 0, 0, 0, 0,
+    0, 0, 0, 0, 10,
+    50, 90, 120, 150, 160,
+    170, 180, 190, 200, 210,
+    220, 230, 240, 245, 250,
+    255, 255, 255, 255, 255,
+};
+
+int main(int argc, char** argv) {
+    if (argc != 3) return 1;
+    std::FILE* f = std::fopen(argv[1], "r");
+    if (!f) return 1;
+    char mode = 0;
+    if (std::fscanf(f, " %c", &mode) != 1) return 1;
+    std::vector<long long> v;
+    long long t;
+    while (std::fscanf(f, "%lld", &t) == 1) v.push_back(t);
+    std::fclose(f);
+    size_t i = 0;
+    std::vector<long long> out;
+
+    if (mode == 'S') {
+        long long width = g_p(v, i), height = g_p(v, i);
+        long long dst_pitch = g_p(v, i), src_pitch = g_p(v, i);
+        long long stype = g_p(v, i), nS = g_p(v, i);
+        std::vector<long long> src((size_t)nS);
+        for (long long k = 0; k < nS; k++) src[(size_t)k] = g_p(v, i);
+        (void)dst_pitch; /* shape-only: output is packed row-major */
+        for (long long y = 0; y < height; y++)
+            for (long long x = 0; x < width; x++) {
+                int s = (int)src[(size_t)(x + y * src_pitch)];
+                out.push_back(norm_qscale(s, (int)stype) & 0xff);
+            }
+    } else if (mode == 'C') {
+        long long width = g_p(v, i), height = g_p(v, i), pitch = g_p(v, i);
+        long long qp_pitch = g_p(v, i), nQ = g_p(v, i);
+        std::vector<long long> qp((size_t)nQ);
+        for (long long k = 0; k < nQ; k++) qp[(size_t)k] = g_p(v, i);
+        (void)pitch; /* shape-only: output is packed row-major */
+        for (long long y = 0; y < height; y++)
+            for (long long x = 0; x < width; x++) {
+                int q = (int)qp[(size_t)(x + y * qp_pitch)] >> 3;
+                out.push_back(q >= 25 ? 255 : SHARPEN_COEFF[q]);
+            }
+    } else if (mode == 'H' || mode == 'V' || mode == 'B') {
+        long long width = g_p(v, i), height = g_p(v, i), pitch = g_p(v, i);
+        long long radius = g_p(v, i), nP = g_p(v, i);
+        std::vector<long long> src((size_t)nP);
+        for (long long k = 0; k < nP; k++) src[(size_t)k] = g_p(v, i);
+        long long org = 8 + 8 * pitch; /* interior origin, 8px margin */
+        for (long long y = 0; y < height; y++) {
+            for (long long x = 0; x < width; x++) {
+                int best = 0; /* upstream uint8_t sum = 0 seed */
+                if (mode == 'H') {
+                    for (long long d = -radius; d <= radius; d++) {
+                        int s = (int)src[(size_t)(org + (x + d) + y * pitch)];
+                        if (s > best) best = s;
+                    }
+                } else if (mode == 'V') {
+                    for (long long d = -radius; d <= radius; d++) {
+                        int s = (int)src[(size_t)(org + x + (y + d) * pitch)];
+                        if (s > best) best = s;
+                    }
+                } else {
+                    for (long long j = -radius; j <= radius; j++)
+                        for (long long d = -radius; d <= radius; d++) {
+                            int s = (int)src[(size_t)(org + (x + d) +
+                                                           (y + j) * pitch)];
+                            if (s > best) best = s;
+                        }
+                }
+                out.push_back(best);
+            }
+        }
+    } else {
+        std::fprintf(stderr, "bad mode %c\n", mode);
+        return 1;
+    }
+
+    std::FILE* o = std::fopen(argv[2], "w");
+    if (!o) return 1;
+    for (size_t k = 0; k < out.size(); k++)
+        std::fprintf(o, "%lld\n", out[k]);
+    std::fclose(o);
+    return 0;
+}

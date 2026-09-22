@@ -12,11 +12,14 @@
  *   kf_deblock        kl_deblock twin (core DCT stage)
  *   kf_make_qp_table  kl_make_qp_table twin (QP table)
  *   kf_deblock_show   kl_deblock_show twin (show==2)
- * plus the kf_norm_qscale helper and the g_deblock_offset tables
- * (g_offx/g_offy).  The remaining KDeblock-family transcriptions
- * (kf_merge_deblock, kf_max_vh/v/h, kf_scale_qp, kf_sharpen_coeff) are
- * // RIG-VERIFY and live separately in kfm_deblock_rig.cl — see
- * docs/RIG_HANDOFF_KDEBLOCK.md for their verification handoff spec.
+ *   kf_max_vh/v/h     kl_max_vh/v/h twins (DC-mask dilation)
+ *   kf_scale_qp       kl_scale_qp twin (ShowQP rescaler)
+ *   kf_sharpen_coeff  kl_sharpen_coeff twin (QP -> sharpen LUT)
+ * plus the kf_norm_qscale helper, the g_deblock_offset tables (g_offx/g_offy)
+ * and the g_sharpen_coeff LUT.  The remaining KDeblock-family transcriptions
+ * (kf_merge_deblock, kf_sharpen, kf_show_sharpen_coeff) are // RIG-VERIFY and
+ * live separately in kfm_deblock_rig.cl — see docs/RIG_HANDOFF_KDEBLOCK.md
+ * for their verification handoff spec.
  *
  * Kernel math (per block (bx,by), a faithful scalar transcription of
  * kl_deblock; channels/pixels are independent):
@@ -382,4 +385,119 @@ kernel void kf_deblock_show(
     OUTP qp = qp_table[bx + by * qp_pitch];
     int is_enabled = (kf_qp_thresh((int)qp, thresh_a, thresh_b) >= (int)(qp >> 1));
     dst[x + y * dst_pitch] = is_enabled ? (PX)230 : (PX)16;
+}
+
+/* QP-block (qp>>3) -> sharpen-strength LUT (Deblock.cu d_sharpen_coeff /
+ * g_sharpen_coeff, 30 entries; index >= 25 saturates to 255 in the kernel;
+ * byte-verified by mechanical diff vs upstream d_/g_ copies). */
+static const uchar g_sharpen_coeff[30] = {
+    0,   0,   0,   0,   0, // 0
+    0,   0,   0,   0,  10, // 5(40)
+   50,  90, 120, 150, 160, // 10(80)
+  170, 180, 190, 200, 210, // 15(120)
+  220, 230, 240, 245, 250, // 20(160)
+  255, 255, 255, 255, 255, // 25(200)
+};
+
+/* ---------------------------------------------------------------------------
+ * kf_max_vh / kf_max_v / kf_max_h — DC-mask box-max dilation used by the
+ * QPForDeblock helper (kl_max_vh / kl_max_v / kl_max_h twins; cpu_max_v /
+ * cpu_max_h are the exact CPU twins, kl_max_vh is device-only upstream).  The
+ * CUDA host instantiates RADIUS=5 in all call sites; radius is a kernel arg
+ * here.  kf_max_v is the scalar per-pixel form of the uchar4-vector CUDA
+ * kernel (lanes independent ⇒ identical); grid is pixels, not uchar4 lanes.
+ * Reads span [-radius, +radius] around every pixel, so src/dst must be the
+ * interior of a plane padded by >= radius (the CUDA host passes pad+8+8*pitch
+ * with an 8 px margin) — identical edge contract as upstream.  Grid: 2D
+ * (width, height).
+ * // ALG-VERIFIED via python/run_kfm_deblock_aux.py (150 cases each): 8px-margin
+ * padded harness, radius 1..8 (5 = production), spike crafts; max_vh is
+ * additionally cross-checked via the separable max_h o max_v identity.
+ * -------------------------------------------------------------------------*/
+kernel void kf_max_vh(
+    __global uchar* __restrict dst, __global const uchar* __restrict src,
+    int width, int height, int pitch, int radius)
+{
+    int x = (int)get_global_id(0);
+    int y = (int)get_global_id(1);
+    if (x >= width || y >= height) return;
+
+    uchar sum = 0;
+    for (int j = -radius; j <= radius; ++j) {
+        for (int i = -radius; i <= radius; ++i) {
+            sum = max(sum, src[(x + i) + (y + j) * pitch]);
+        }
+    }
+    dst[x + y * pitch] = sum;
+}
+
+kernel void kf_max_v(
+    __global uchar* __restrict dst, __global const uchar* __restrict src,
+    int width, int height, int pitch, int radius)
+{
+    int x = (int)get_global_id(0);
+    int y = (int)get_global_id(1);
+    if (x >= width || y >= height) return;
+
+    uchar sum = 0;
+    for (int i = -radius; i <= radius; ++i) {
+        sum = max(sum, src[x + (y + i) * pitch]);
+    }
+    dst[x + y * pitch] = sum;
+}
+
+kernel void kf_max_h(
+    __global uchar* __restrict dst, __global const uchar* __restrict src,
+    int width, int height, int pitch, int radius)
+{
+    int x = (int)get_global_id(0);
+    int y = (int)get_global_id(1);
+    if (x >= width || y >= height) return;
+
+    uchar sum = 0;
+    for (int i = -radius; i <= radius; ++i) {
+        sum = max(sum, src[(x + i) + y * pitch]);
+    }
+    dst[x + y * pitch] = sum;
+}
+
+/* ---------------------------------------------------------------------------
+ * kf_scale_qp — rescale a QP plane by codec QP-scale-type (kl_scale_qp /
+ * cpu_scale_qp twin; the ShowQP debug filter).  Per pixel:
+ *   dst = (uchar)norm_qscale(src, scale_type)
+ * The int->uchar conversion wraps mod 256 exactly like the CUDA assignment.
+ * Grid: 2D (width, height).
+ * // ALG-VERIFIED via python/run_kfm_deblock_aux.py (200 cases): full-range
+ * inputs, mod-256 wrap pins (type 0), and out-of-range scale types.
+ * -------------------------------------------------------------------------*/
+kernel void kf_scale_qp(
+    int width, int height,
+    __global uchar* __restrict dst, int dst_pitch,
+    __global const uchar* __restrict src, int src_pitch, int scale_type)
+{
+    int x = (int)get_global_id(0);
+    int y = (int)get_global_id(1);
+    if (x >= width || y >= height) return;
+
+    dst[x + y * dst_pitch] = (uchar)kf_norm_qscale((int)src[x + y * src_pitch], scale_type);
+}
+
+/* ---------------------------------------------------------------------------
+ * kf_sharpen_coeff — QP-block -> sharpen-strength LUT (kl_sharpen_coeff /
+ * cpu_sharpen_coeff twin; feeds the SharpenFilter, not KDeblock itself):
+ *   q = qp[x + y*qp_pitch] >> 3;  dst = (q >= 25) ? 255 : g_sharpen_coeff[q]
+ * Grid: 2D (width, height) over the QP-block grid.
+ * // ALG-VERIFIED via python/run_kfm_deblock_aux.py (200 cases): qp swept
+ * 0..65535 with q=24/25 boundary emphasis; LUT bytes diffed vs upstream.
+ * -------------------------------------------------------------------------*/
+kernel void kf_sharpen_coeff(
+    __global uchar* __restrict dst, int width, int height, int pitch,
+    __global const ushort* __restrict qp, int qp_pitch)
+{
+    int x = (int)get_global_id(0);
+    int y = (int)get_global_id(1);
+    if (x >= width || y >= height) return;
+
+    int q = ((int)qp[x + y * qp_pitch]) >> 3;
+    dst[x + y * pitch] = (q >= 25) ? (uchar)255 : g_sharpen_coeff[q];
 }

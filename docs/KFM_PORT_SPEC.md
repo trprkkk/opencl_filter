@@ -20,7 +20,7 @@ KTGMC kernels were. KDeband was chosen first (see docs/PORT_PLAN.md §5).
 | `KDeband.cu` | `KTemporalNR`, `KDeband`, `KEdgeLevel` | **KDeband core done**; **KEdgeLevel done**; **KTemporalNR done** |
 | `KFMKernel.cu` | `KPatchCombe`, `KFMSwitch`, `KFMPad`, `KFMDecimate`, `AssumeDevice` | inventoried: host-only, no device kernels (see below; its only kernel dep `kl_merge` is ported as `kf_merge_block`) |
 | `CombingAnalyze.cu` | `KFMSuper`, `KCleanSuper`, `KPreCycleAnalyze(_Show)`, `KFMSuperShow`, `KTelecine(_Super)`, `KSwitchFlag`, `KContainsCombe`, `KCombeMask`, `KRemoveCombe` | not started |
-| `Deblock.cu` | `KDeblock`, `QPClip`, `ShowQP`, `FrameType` | **all 11 device kernels transcribed** (`kf_deblock`, `kf_make_qp_table`, `kf_deblock_show` ALG-VERIFIED; `kf_merge_deblock`, `kf_max_vh/v/h`, `kf_scale_qp`, `kf_sharpen_coeff`, `kf_sharpen`, `kf_show_sharpen_coeff` in the separate provisional `kfm_deblock_rig.cl`, `// RIG-VERIFY`, handoff spec in `docs/RIG_HANDOFF_KDEBLOCK.md`; QPClip is a no-op pass-through) |
+| `Deblock.cu` | `KDeblock`, `QPClip`, `ShowQP`, `FrameType` | **all 11 device kernels transcribed** (`kf_deblock`, `kf_make_qp_table`, `kf_deblock_show`, `kf_max_vh/v/h`, `kf_scale_qp`, `kf_sharpen_coeff` ALG-VERIFIED; `kf_merge_deblock`, `kf_sharpen`, `kf_show_sharpen_coeff` in the separate provisional `kfm_deblock_rig.cl`, `// RIG-VERIFY`, handoff spec in `docs/RIG_HANDOFF_KDEBLOCK.md`; QPClip is a no-op pass-through) |
 | `DecombeUCF.cu` | `KCFieldDiff`, `KCFrameDiffDup`, `KNoiseClip`, `KAnalyzeNoise`, `KDecombUCF*` | **device kernels 8/8 done** (KNoiseClip + 7 reductions, see below; only host pipelines remain) |
 | `MergeStatic.cu` | `KTemporalDiff`, `KAnalyzeStatic`, `KMergeStatic` | **all 6 pipeline kernels done** (KDeband.cu-style core; KAnalyzeStatic host glue in `kfm_filterbase.cl`/`kfm_mergestatic.cl`) |
 
@@ -412,8 +412,7 @@ src/opencl/kfm/kernels/kfm_deblock.cl)
   (200+200 cases, integer-exact, float32-emulated blend) against
   `sim/kfm_deblock_qp_ref.cpp`.
 
-### `KDeblock` merge / DC-mask / ShowQP / sharpen (`kf_merge_deblock`,
-`kf_max_vh/v/h`, `kf_scale_qp`, `kf_sharpen_coeff`, `kf_sharpen`,
+### `KDeblock` merge / sharpen (`kf_merge_deblock`, `kf_sharpen`,
 `kf_show_sharpen_coeff`,
 src/opencl/kfm/kernels/kfm_deblock_rig.cl) — `// RIG-VERIFY` transcriptions
 
@@ -427,6 +426,15 @@ form is lane-identical to the vector CUDA kernels. They are **not** covered by
 OpenCL device before use. The full verification handoff spec for another
 agent (upstream line map, per-kernel traps, mirror+golden recipe, graduation
 checklist) is `docs/RIG_HANDOFF_KDEBLOCK.md`.
+
+Graduated to `kfm_deblock.cl` (`// ALG-VERIFIED` via
+`python/run_kfm_deblock_aux.py`, 850 cases vs `sim/kfm_deblock_aux_ref.cpp`):
+`kf_max_vh`/`kf_max_v`/`kf_max_h` (radius-`R` box-max dilation, 8px-margin
+padded harness, radius 1..8 with 5 = production; `max_vh` cross-checked via
+the separable `max_h` o `max_v` identity), `kf_scale_qp` (full-range inputs,
+mod-256 wrap pins, out-of-range scale types) and `kf_sharpen_coeff` (`qp`
+swept 0..65535 with `q` = 24/25 boundary emphasis; LUT bytes diffed against
+upstream). Still in the rig file:
 
 - `kf_merge_deblock` (twin of `kl_merge_deblock`/`cpu_merge_deblock`): per
   visible pixel sums the 4 parity-slice accumulator rows
@@ -445,19 +453,6 @@ checklist) is `docs/RIG_HANDOFF_KDEBLOCK.md`.
   (ushort2-packed == row-major ushort, incl. the atomicAdd-packed halves on
   little-endian), so the merge consumes `kf_deblock`'s output directly with
   `tmp_pitch_u4 = acc_pitch_ushort >> 2`. Reasoned, not run.
-- `kf_max_vh` / `kf_max_v` / `kf_max_h` (twins of `kl_max_vh`/`kl_max_v`/
-  `kl_max_h`; `cpu_max_v`/`cpu_max_h` are exact CPU twins, `kl_max_vh` is
-  device-only upstream): radius-`R` box-max dilation of the DC luma mask in
-  the `QPForDeblock` helper (upstream always instantiates `RADIUS=5`; radius
-  is a kernel arg here). Reads span ±radius around every pixel, so the caller
-  must pass the interior of a plane padded by ≥ radius (same edge contract as
-  the CUDA host, which passes pad+8+8*pitch with an 8 px margin).
-- `kf_scale_qp` (twin of `kl_scale_qp`/`cpu_scale_qp`, the ShowQP filter
-  kernel): per-pixel `(uchar)norm_qscale(src, scale_type)` via `kf_norm_qscale`
-  (int→uchar wraps mod 256 exactly like the CUDA assignment).
-- `kf_sharpen_coeff` (twin of `kl_sharpen_coeff`/`cpu_sharpen_coeff`): QP-block
-  → sharpen-strength LUT `q = qp>>3; dst = (q>=25) ? 255 : g_sharpen_coeff[q]`
-  (30-entry table verbatim). Feeds the SharpenFilter, not KDeblock itself.
 - `kf_sharpen` (twin of `kl_sharpen`, SharpenFilter core): 3×3 edge-clamped
   min/max window (transcribes the device form verbatim, including the upstream
   `min(x+1,height-1)` quirk), `c = bilinear(coeff,x/8,y/8)/255`,

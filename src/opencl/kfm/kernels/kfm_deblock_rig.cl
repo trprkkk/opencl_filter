@@ -11,20 +11,17 @@
  *
  * Contents (all // RIG-VERIFY):
  *   kf_merge_deblock  kl_merge_deblock twin (Bayer accumulator merge)
- *   kf_max_vh/v/h     kl_max_vh/v/h twins (DC-mask box-max dilation)
- *   kf_scale_qp       kl_scale_qp twin (ShowQP rescaler)
- *   kf_sharpen_coeff  kl_sharpen_coeff twin (QP -> sharpen-strength LUT)
  *   kf_sharpen        kl_sharpen twin (SharpenFilter; texture->manual bilinear)
  *   kf_show_sharpen_coeff  kl_show_sharpen_coeff twin (coeff visualiser)
- * plus the g_ldither Bayer table, the g_sharpen_coeff LUT, the
- * kf_sharpen_bilinear helper, and a private copy
- * of the kf_norm_qscale helper (duplicated from kfm_deblock.cl so this file
- * is standalone — keep the two copies in sync).
+ * plus the g_ldither Bayer table and the kf_sharpen_bilinear helper.
+ * (kf_max_vh/v/h, kf_scale_qp, kf_sharpen_coeff graduated to kfm_deblock.cl
+ * as // ALG-VERIFIED; the g_sharpen_coeff LUT moved with them.)
  *
  * Upstream grounding: rigaya/AviSynthCUDAFilters, KFM/Deblock.cu at commit
  *   cceb8da0e623e6bf5eea2cf655b06d4428e1600b
  * (all eight kernels + both tables were re-checked semantically identical at
- * upstream HEAD 8e086bb; only brace style drifted).  Per-kernel line numbers
+ * upstream HEAD 8e086bb; only brace style drifted).  Graduated kernels were
+ * re-verified against upstream HEAD 68aef6e.  Per-kernel line numbers
  * and the full verification recipe live in docs/RIG_HANDOFF_KDEBLOCK.md —
  * READ THAT FILE BEFORE TOUCHING THIS ONE.
  *
@@ -52,34 +49,6 @@ static const uchar g_ldither[8][2][4] = {
   { { 10,  58,   6,  54 }, {  9,  57,   5,  53 } },
   { { 42,  26,  38,  22 }, { 41,  25,  37,  21 } },
 };
-
-/* QP-block (qp>>3) -> sharpen-strength LUT (Deblock.cu d_sharpen_coeff /
- * g_sharpen_coeff, 30 entries; index >= 25 saturates to 255 in the kernel). */
-static const uchar g_sharpen_coeff[30] = {
-    0,   0,   0,   0,   0, // 0
-    0,   0,   0,   0,  10, // 5(40)
-   50,  90, 120, 150, 160, // 10(80)
-  170, 180, 190, 200, 210, // 15(120)
-  220, 230, 240, 245, 250, // 20(160)
-  255, 255, 255, 255, 255, // 25(200)
-};
-
-/* Private copy of the kf_norm_qscale helper (see kfm_deblock.cl): normalize a
- * QP value by the codec's QP scale type (norm_qscale in Deblock.cu):
- *   type 0 (FF_QSCALE_TYPE_MPEG1): qscale << 2
- *   type 1 (FF_QSCALE_TYPE_MPEG2): qscale << 1
- *   type 2 (FF_QSCALE_TYPE_H264) : qscale
- *   type 3 (FF_QSCALE_TYPE_VP56) : 63 - qscale + 2   (= 65 - qscale) */
-static int kf_norm_qscale(int qscale, int type)
-{
-    switch (type) {
-    case 0: return qscale << 2;
-    case 1: return qscale << 1;
-    case 2: return qscale;
-    case 3: return (63 - qscale + 2);
-    }
-    return qscale;
-}
 
 /* ---------------------------------------------------------------------------
  * kf_merge_deblock — merge the 16-bit block-parity accumulator into the final
@@ -121,105 +90,6 @@ kernel void kf_merge_deblock(
               (float)g_ldither[y & 7][X & 1][L] * (1.0f / 64.0f);
     v = fmin(v, maxv);
     out[x + y * out_pitch] = (PX)v;
-}
-
-/* ---------------------------------------------------------------------------
- * kf_max_vh / kf_max_v / kf_max_h — DC-mask box-max dilation used by the
- * QPForDeblock helper (kl_max_vh / kl_max_v / kl_max_h twins; cpu_max_v /
- * cpu_max_h are the exact CPU twins, kl_max_vh is device-only upstream).  The
- * CUDA host instantiates RADIUS=5 in all call sites; radius is a kernel arg
- * here.  kf_max_v is the scalar per-pixel form of the uchar4-vector CUDA
- * kernel (lanes independent ⇒ identical); grid is pixels, not uchar4 lanes.
- * Reads span [-radius, +radius] around every pixel, so src/dst must be the
- * interior of a plane padded by >= radius (the CUDA host passes pad+8+8*pitch
- * with an 8 px margin) — identical edge contract as upstream.  Grid: 2D
- * (width, height).
- * // RIG-VERIFY: faithful transcriptions, no mirror/golden yet.
- * -------------------------------------------------------------------------*/
-kernel void kf_max_vh(
-    __global uchar* __restrict dst, __global const uchar* __restrict src,
-    int width, int height, int pitch, int radius)
-{
-    int x = (int)get_global_id(0);
-    int y = (int)get_global_id(1);
-    if (x >= width || y >= height) return;
-
-    uchar sum = 0;
-    for (int j = -radius; j <= radius; ++j) {
-        for (int i = -radius; i <= radius; ++i) {
-            sum = max(sum, src[(x + i) + (y + j) * pitch]);
-        }
-    }
-    dst[x + y * pitch] = sum;
-}
-
-kernel void kf_max_v(
-    __global uchar* __restrict dst, __global const uchar* __restrict src,
-    int width, int height, int pitch, int radius)
-{
-    int x = (int)get_global_id(0);
-    int y = (int)get_global_id(1);
-    if (x >= width || y >= height) return;
-
-    uchar sum = 0;
-    for (int i = -radius; i <= radius; ++i) {
-        sum = max(sum, src[x + (y + i) * pitch]);
-    }
-    dst[x + y * pitch] = sum;
-}
-
-kernel void kf_max_h(
-    __global uchar* __restrict dst, __global const uchar* __restrict src,
-    int width, int height, int pitch, int radius)
-{
-    int x = (int)get_global_id(0);
-    int y = (int)get_global_id(1);
-    if (x >= width || y >= height) return;
-
-    uchar sum = 0;
-    for (int i = -radius; i <= radius; ++i) {
-        sum = max(sum, src[(x + i) + y * pitch]);
-    }
-    dst[x + y * pitch] = sum;
-}
-
-/* ---------------------------------------------------------------------------
- * kf_scale_qp — rescale a QP plane by codec QP-scale-type (kl_scale_qp /
- * cpu_scale_qp twin; the ShowQP debug filter).  Per pixel:
- *   dst = (uchar)norm_qscale(src, scale_type)
- * The int->uchar conversion wraps mod 256 exactly like the CUDA assignment.
- * Grid: 2D (width, height).
- * // RIG-VERIFY: faithful transcription, no mirror/golden yet.
- * -------------------------------------------------------------------------*/
-kernel void kf_scale_qp(
-    int width, int height,
-    __global uchar* __restrict dst, int dst_pitch,
-    __global const uchar* __restrict src, int src_pitch, int scale_type)
-{
-    int x = (int)get_global_id(0);
-    int y = (int)get_global_id(1);
-    if (x >= width || y >= height) return;
-
-    dst[x + y * dst_pitch] = (uchar)kf_norm_qscale((int)src[x + y * src_pitch], scale_type);
-}
-
-/* ---------------------------------------------------------------------------
- * kf_sharpen_coeff — QP-block -> sharpen-strength LUT (kl_sharpen_coeff /
- * cpu_sharpen_coeff twin; feeds the SharpenFilter, not KDeblock itself):
- *   q = qp[x + y*qp_pitch] >> 3;  dst = (q >= 25) ? 255 : g_sharpen_coeff[q]
- * Grid: 2D (width, height) over the QP-block grid.
- * // RIG-VERIFY: faithful transcription, no mirror/golden yet.
- * -------------------------------------------------------------------------*/
-kernel void kf_sharpen_coeff(
-    __global uchar* __restrict dst, int width, int height, int pitch,
-    __global const ushort* __restrict qp, int qp_pitch)
-{
-    int x = (int)get_global_id(0);
-    int y = (int)get_global_id(1);
-    if (x >= width || y >= height) return;
-
-    int q = ((int)qp[x + y * qp_pitch]) >> 3;
-    dst[x + y * pitch] = (q >= 25) ? (uchar)255 : g_sharpen_coeff[q];
 }
 
 /* ---------------------------------------------------------------------------

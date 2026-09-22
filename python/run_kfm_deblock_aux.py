@@ -1,6 +1,9 @@
 """Independent golden vs sim/kfm_deblock_aux_ref.cpp (graduated KDeblock helpers).
 
-Modes: S scale_qp, C sharpen_coeff, H max_h, V max_v, B max_vh, G merge.
+Modes: S scale_qp, C sharpen_coeff, H max_h, V max_v, B max_vh, G merge,
+P sharpen, W show_sharpen_coeff.  P/W pin the deterministic
+(manual-bilinear) behaviour only; vs CUDA texture filtering a device run
+is still required, so the kernels stay // RIG-VERIFY (not graduated).
 The B golden
 is the separable composition max_h o max_v (box-max separability), which
 cross-checks the direct box form in the mirror per the handoff recipe.
@@ -102,6 +105,53 @@ def run_deblock_mirror(nums):
     subprocess.run([BIN_DB, inf, outf], check=True)
     with open(outf) as f:
         return [int(line) for line in f]
+
+
+def golden_bilinear(coeff, coeff_pitch, x, y):
+    fx = F(F(float(x)) * F(1.0 / 8.0))
+    fy = F(F(float(y)) * F(1.0 / 8.0))
+    ix, iy = int(fx), int(fy)
+    c00 = F(float(coeff[ix + iy * coeff_pitch]))
+    c01 = F(float(coeff[ix + 1 + iy * coeff_pitch]))
+    c10 = F(float(coeff[ix + (iy + 1) * coeff_pitch]))
+    c11 = F(float(coeff[ix + 1 + (iy + 1) * coeff_pitch]))
+    fracx = F(fx - F(float(ix)))
+    fracy = F(fy - F(float(iy)))
+    top = F(F(c00 * F(1.0 - fracx)) + F(c01 * fracx))
+    bot = F(F(c10 * F(1.0 - fracx)) + F(c11 * fracx))
+    return F(F(top * F(1.0 - fracy)) + F(bot * fracy))
+
+
+def golden_sharpen(width, height, pitch, src_pitch, coeff_pitch, src, coeff,
+                   unsharp, quirk):
+    # quirk=True: device form min(x+1,height-1); False: width-1 clamp.
+    xcap = height - 1 if quirk else width - 1
+    out = []
+    for y in range(height):
+        for x in range(width):
+            s = src[x + y * src_pitch]
+            l = h = s
+            xm1 = x - 1 if x - 1 >= 0 else 0
+            xp1 = x + 1 if x + 1 <= xcap else xcap
+            ym1 = y - 1 if y - 1 >= 0 else 0
+            yp1 = y + 1 if y + 1 <= height - 1 else height - 1
+            for tx, ty in ((xm1, ym1), (x, ym1), (xp1, ym1), (xm1, y),
+                           (xp1, y), (xm1, yp1), (x, yp1), (xp1, yp1)):
+                vv = src[tx + ty * src_pitch]
+                l = vv if vv < l else l
+                h = vv if vv > h else h
+            c = F(golden_bilinear(coeff, coeff_pitch, x, y) * F(1.0 / 255.0))
+            u = unsharp[x + y * pitch]
+            r = F(F(F(float(s)) + F(F(float(s - u)) * c)) + 0.5)
+            r = F(float(l)) if r < F(float(l)) else r
+            r = F(float(h)) if r > F(float(h)) else r
+            out.append(int(r))
+    return out
+
+
+def golden_show(coeff, coeff_pitch, width, height):
+    return [int(golden_bilinear(coeff, coeff_pitch, x, y))
+            for y in range(height) for x in range(width)]
 
 
 def golden_merge(vis_w, vis_h, pitch_u4, ipitch, shift, maxv, tmp):
@@ -396,8 +446,106 @@ def main():
                      for bbx in range(8) for tx in range(8) for j in range(2))
         check("L", back + [1 if idx_ok else 0], scalar + [1], (W2, H, P2))
 
+    # P: sharpen pin (width mult of 8; quirk configs width>height; bits 8/16)
+    for t in range(250):
+        maxv = rng.choice([255, 65535])
+        width = rng.choice([8, 16, 24, 32, 40, 48, 64])
+        height = rng.choice([1, 2, 3, 4, 5, 7, 8, 9, 12, 13, 15, 16, 20,
+                             24, 32, 33, 40])
+        pitch = width + rng.choice([0, 0, 1, 2])
+        # +1 guard column: the quirk tap min(x+1,height-1) reads column
+        # `width` when height > width (production's pad margin covers it).
+        src_pitch = width + 1 + rng.choice([0, 0, 1, 2])
+        qpw = (width + 15) >> 3
+        qph = (height + 15) >> 3
+        coeff_pitch = qpw + rng.choice([0, 0, 1])
+        nS = src_pitch * height
+        nC = coeff_pitch * qph
+        nU = pitch * height
+        # taps-in-bounds algebra (host contract, qp-sized + margin)
+        assert ((width - 1) >> 3) + 1 < qpw + 1
+        assert ((width - 1) >> 3) + 1 <= qpw
+        assert ((height - 1) >> 3) + 1 <= qph
+        craft = t % 6
+        if craft == 0:
+            src = [rng.randint(0, maxv) for _ in range(nS)]
+            coeff = [rng.randint(0, 255) for _ in range(nC)]
+            unsharp = [rng.randint(0, maxv) for _ in range(nU)]
+        elif craft == 1:  # coeff 0 -> c=0 -> out == src (no-branch identity)
+            src = [rng.randint(0, maxv) for _ in range(nS)]
+            coeff = [0] * nC
+            unsharp = [rng.randint(0, maxv) for _ in range(nU)]
+        elif craft == 2:  # quirk-forcing: ramp cols, u=0, c~1 -> out=h
+            src = [min(x % src_pitch, maxv) if (x % src_pitch) < width else 0
+                   for x in range(nS)]
+            coeff = [255] * nC
+            unsharp = [0] * nU
+        elif craft == 3:  # coeff ramp 0->255 hits every trunc boundary
+            src = [rng.randint(0, maxv) for _ in range(nS)]
+            coeff = [(i * 7 + t) % 256 for i in range(nC)]
+            unsharp = [rng.randint(0, maxv) for _ in range(nU)]
+        elif craft == 4:  # flat src -> window collapses, out==s always
+            c0 = rng.randint(0, maxv)
+            src = [c0] * nS
+            coeff = [rng.randint(0, 255) for _ in range(nC)]
+            unsharp = [rng.randint(0, maxv) for _ in range(nU)]
+        else:  # checker src, extreme unsharp
+            src = [0 if (x // 1 + x // max(1, src_pitch)) % 2 == 0 else maxv
+                   for x in range(nS)]
+            coeff = [rng.choice([0, 1, 127, 128, 254, 255]) for _ in range(nC)]
+            unsharp = [rng.choice([0, maxv]) for _ in range(nU)]
+        nums = (["P", width, height, pitch, src_pitch, coeff_pitch, qph,
+                 nS, nC, nU] + src + coeff + unsharp)
+        exp = golden_sharpen(width, height, pitch, src_pitch, coeff_pitch,
+                             src, coeff, unsharp, True)
+        info = (width, height, maxv, craft)
+        check("P", run_mirror(nums), exp, info)
+        if craft == 1:  # c==0 identity: deterministic out == src visible
+            total += 1
+            vis = [src[x + y * src_pitch]
+                   for y in range(height) for x in range(width)]
+            if exp != vis:
+                ok = False
+                print("P", "C0-IDENTITY MISMATCH", info)
+        if craft == 2 and width > height:  # quirk must bite, or test is void
+            total += 1
+            alt = golden_sharpen(width, height, pitch, src_pitch, coeff_pitch,
+                                 src, coeff, unsharp, False)
+            if alt == exp:
+                ok = False
+                print("P", "QUIRK-NOT-EXERCISED", info)
+
+    # W: show_sharpen_coeff pin (fractional x/8, ramps, bits 8/16)
+    for t in range(150):
+        width = rng.choice([8, 16, 24, 32, 40, 48, 64])
+        height = rng.choice([1, 2, 3, 5, 8, 9, 13, 16, 24, 31, 32])
+        pitch = width + rng.choice([0, 0, 1])
+        qpw = (width + 15) >> 3
+        qph = (height + 15) >> 3
+        coeff_pitch = qpw + rng.choice([0, 0, 1])
+        nC = coeff_pitch * qph
+        assert ((width - 1) >> 3) + 1 <= qpw
+        assert ((height - 1) >> 3) + 1 <= qph
+        craft = t % 4
+        if craft == 0:
+            coeff = [rng.randint(0, 255) for _ in range(nC)]
+        elif craft == 1:  # full 0->255 ramp per row
+            coeff = [(x * 255) // max(1, coeff_pitch - 1)
+                     for x in range(nC)]
+            coeff = [coeff[i % coeff_pitch] for i in range(nC)]
+        elif craft == 2:  # extremes checkerboard
+            coeff = [0 if (i + i // max(1, coeff_pitch)) % 2 == 0 else 255
+                     for i in range(nC)]
+        else:  # single-texel spike (bilinear fan-out)
+            coeff = [0] * nC
+            coeff[rng.randrange(nC)] = 255
+        nums = (["W", width, height, pitch, coeff_pitch, qph, nC] + coeff)
+        check("W", run_mirror(nums),
+              golden_show(coeff, coeff_pitch, width, height),
+              (width, height, craft))
+
     print("KFM KDeblock aux (scale_qp/sharpen_coeff/max_h/max_v/max_vh/"
-          "merge_deblock+e2e): PASS (%d cases)" % total)
+          "merge_deblock+e2e/sharpen+show pins): PASS (%d cases)" % total)
     sys.exit(0 if ok else 1)
 
 

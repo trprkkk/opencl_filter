@@ -83,8 +83,10 @@ static float kf_sharpen_bilinear(
  * // RIG-VERIFY: device-faithful transcription, but the texture fetch is
  * // manual float32 bilinear while CUDA uses HW fixed-point texture filtering
  * // — the two agree structurally yet may differ at float rounding boundaries,
- * // which is unknowable without a device run.  No mirror/golden yet; see the
- * // handoff doc for the device-comparison verification recipe.
+ * // which is unknowable without a device run.  Deterministic behaviour is
+ * // pinned by sim/kfm_deblock_aux_ref.cpp + python/run_kfm_deblock_aux.py
+ * // (P mode: quirk configs, c==0 identity, float32-exact golden) — the
+ * // device comparison (handoff doc recipe) is still required to graduate.
  * -------------------------------------------------------------------------*/
 kernel void kf_sharpen(
     __global PX* __restrict dst, int width, int height, int pitch,
@@ -134,9 +136,10 @@ kernel void kf_sharpen(
  * expression (the device computes (int)(normalized_tex*255), equal up to
  * texture-filter precision).  Same coeff host contract as kf_sharpen.
  * Grid: 2D (width, height).
- * // RIG-VERIFY: same texture-precision caveat as kf_sharpen; no
- * // mirror/golden yet (but the CPU-twin relation is exact, so a mirror+golden
- * // pair CAN pin this kernel's deterministic behaviour — see handoff doc).
+ * // RIG-VERIFY: same texture-precision caveat as kf_sharpen; deterministic
+ * // behaviour is pinned by sim/kfm_deblock_aux_ref.cpp (W mode) +
+ * // python/run_kfm_deblock_aux.py (ramps, fractional taps, float32-exact
+ * // golden) — the device run is still required to close the texture gap.
  * -------------------------------------------------------------------------*/
 kernel void kf_show_sharpen_coeff(
     __global PX* __restrict dst, int width, int height, int pitch,

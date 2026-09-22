@@ -208,8 +208,9 @@ To get a working deinterlacer you must port the mvtools-equivalent layers:
   `python/run_kfm_deblock_qp.py`). Graduated from the rig file, the DC-mask
   `kf_max_vh/v/h`, ShowQP `kf_scale_qp`, sharpen-LUT `kf_sharpen_coeff` and
   the Bayer `kf_merge_deblock` (+`g_ldither`) are ALG-VERIFIED too
-  (`python/run_kfm_deblock_aux.py`, 1120 cases, integer/float32-exact,
-  incl. merge end-to-end + layout proofs). The SharpenFilter pair
+  (`python/run_kfm_deblock_aux.py`, 1593 cases, integer/float32-exact,
+  incl. merge end-to-end + layout proofs and sharpen/show deterministic
+  pins). The SharpenFilter pair
   `kf_sharpen` / `kf_show_sharpen_coeff` lives separately in the
   provisional `kfm_deblock_rig.cl` as `// RIG-VERIFY` (faithful,
   unverified — not covered by `make test`, handoff spec in

@@ -427,7 +427,7 @@ agent (upstream line map, per-kernel traps, mirror+golden recipe, graduation
 checklist) is `docs/RIG_HANDOFF_KDEBLOCK.md`.
 
 Graduated to `kfm_deblock.cl` (`// ALG-VERIFIED` via
-`python/run_kfm_deblock_aux.py`, 1120 cases vs `sim/kfm_deblock_aux_ref.cpp`):
+`python/run_kfm_deblock_aux.py`, 1593 cases vs `sim/kfm_deblock_aux_ref.cpp`):
 `kf_max_vh`/`kf_max_v`/`kf_max_h` (radius-`R` box-max dilation, 8px-margin
 padded harness, radius 1..8 with 5 = production; `max_vh` cross-checked via
 the separable `max_h` o `max_v` identity), `kf_scale_qp` (full-range inputs,
@@ -437,7 +437,10 @@ upstream) and `kf_merge_deblock` (250 merge cases: quality 1..6 x bits
 8/10/12/16, spike crafts pinning the k/X/L summation, dither-boundary flips;
 15 end-to-end cases on real `kf_deblock` accumulators; 5 handoff-section-5
 packing identity checks — packed ushort2 == scalar ushort proven, not
-reasoned). Still in the rig file:
+reasoned). The remaining sharpen pair is also pinned by the same runner
+(P/W modes: quirk configs, c==0 identity, bilinear ramps — deterministic
+behaviour only; the texture-gap device run is still open). Still in the
+rig file:
 
 - `kf_sharpen` (twin of `kl_sharpen`, SharpenFilter core): 3×3 edge-clamped
   min/max window (transcribes the device form verbatim, including the upstream

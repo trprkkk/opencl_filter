@@ -201,11 +201,12 @@ Makefile                       # make test  (no OpenCL required)
   the DC-mask dilation `kf_max_vh/v/h`, the ShowQP scaler `kf_scale_qp`, the
   sharpen LUT `kf_sharpen_coeff` and the Bayer accumulator merge
   `kf_merge_deblock` (+`g_ldither`), **ALG-VERIFIED** via
-  `python/run_kfm_deblock_aux.py` (1120 cases vs `sim/kfm_deblock_aux_ref.cpp`,
-  incl. merge end-to-end + layout proofs).
+  `python/run_kfm_deblock_aux.py` (1593 cases vs `sim/kfm_deblock_aux_ref.cpp`,
+  incl. merge end-to-end + layout proofs and sharpen/show deterministic pins).
   The remaining member — the SharpenFilter pair `kf_sharpen` /
   `kf_show_sharpen_coeff` (manual bilinear replacing the CUDA texture fetch;
-  device-run comparison mandatory) — lives separately in `kfm_deblock_rig.cl`
+  device-run comparison mandatory; deterministic behaviour already
+  pinned) — lives separately in `kfm_deblock_rig.cl`
   as faithful `// RIG-VERIFY` transcriptions (bannered PROVISIONAL/UNVERIFIED,
   not covered by `make test`); all 11 Deblock.cu device kernels are now
   transcribed, with the host sequencing and rig proofs remaining open.

@@ -27,6 +27,16 @@
  *                  pre-offset applied inside); per-pixel 4-slice float32
  *                  merge with Bayer dither, fmin(maxv), truncation.
  *                  -> output vis_w*vis_h
+ *     P sharpen  : P width height pitch src_pitch coeff_pitch qph  nS nC
+ *                  nU  src(nS) coeff(nC) unsharp(nU); device-form 3x3
+ *                  window (incl. the min(x+1,height-1) quirk), manual
+ *                  float32 bilinear c, unsharp on dst pitch.
+ *                  -> output width*height
+ *     W show     : W width height pitch coeff_pitch qph  nC  coeff(nC);
+ *                  dst = (int)bilinear(coeff,x/8,y/8).
+ *                  -> output width*height
+ *   P/W pin the deterministic (manual-bilinear) behaviour only; vs the
+ *   CUDA texture path a device run is still required (// RIG-VERIFY kept).
  */
 #include <cstdio>
 #include <cstdlib>
@@ -164,6 +174,80 @@ int main(int argc, char** argv) {
                 float vv = (float)sum * inv + (float)d * sixth;
                 vv = vv < maxv ? vv : maxv; /* fmin (no NaN: inputs >= 0) */
                 out.push_back((int)vv); /* C truncation; in [0,maxv] */
+            }
+        }
+    } else if (mode == 'P') {
+        long long width = g_p(v, i), height = g_p(v, i), pitch = g_p(v, i);
+        long long src_pitch = g_p(v, i), coeff_pitch = g_p(v, i);
+        long long qph = g_p(v, i);
+        long long nS = g_p(v, i), nC = g_p(v, i), nU = g_p(v, i);
+        std::vector<long long> src((size_t)nS), cf((size_t)nC), us((size_t)nU);
+        for (long long k = 0; k < nS; k++) src[(size_t)k] = g_p(v, i);
+        for (long long k = 0; k < nC; k++) cf[(size_t)k] = g_p(v, i);
+        for (long long k = 0; k < nU; k++) us[(size_t)k] = g_p(v, i);
+        (void)qph; /* shape-only */
+        for (long long y = 0; y < height; y++) {
+            for (long long x = 0; x < width; x++) {
+                int s = (int)src[(size_t)(x + y * src_pitch)];
+                int l = s, h = s, vv;
+                long long xm1 = x - 1 >= 0 ? x - 1 : 0;
+                long long xp1 = x + 1 <= height - 1 ? x + 1 : height - 1;
+                long long ym1 = y - 1 >= 0 ? y - 1 : 0;
+                long long yp1 = y + 1 <= height - 1 ? y + 1 : height - 1;
+                vv = (int)src[(size_t)(xm1 + ym1 * src_pitch)];
+                if (vv < l) l = vv; if (vv > h) h = vv;
+                vv = (int)src[(size_t)(x + ym1 * src_pitch)];
+                if (vv < l) l = vv; if (vv > h) h = vv;
+                vv = (int)src[(size_t)(xp1 + ym1 * src_pitch)];
+                if (vv < l) l = vv; if (vv > h) h = vv;
+                vv = (int)src[(size_t)(xm1 + y * src_pitch)];
+                if (vv < l) l = vv; if (vv > h) h = vv;
+                vv = (int)src[(size_t)(xp1 + y * src_pitch)];
+                if (vv < l) l = vv; if (vv > h) h = vv;
+                vv = (int)src[(size_t)(xm1 + yp1 * src_pitch)];
+                if (vv < l) l = vv; if (vv > h) h = vv;
+                vv = (int)src[(size_t)(x + yp1 * src_pitch)];
+                if (vv < l) l = vv; if (vv > h) h = vv;
+                vv = (int)src[(size_t)(xp1 + yp1 * src_pitch)];
+                if (vv < l) l = vv; if (vv > h) h = vv;
+                /* cpu-twin-verbatim manual bilinear, then /255 (device: tex) */
+                float fx = (float)x * (1.0f / 8.0f);
+                float fy = (float)y * (1.0f / 8.0f);
+                int ix = (int)fx, iy = (int)fy;
+                float c00 = (float)cf[(size_t)(ix + iy * coeff_pitch)];
+                float c01 = (float)cf[(size_t)(ix + 1 + iy * coeff_pitch)];
+                float c10 = (float)cf[(size_t)(ix + (iy + 1) * coeff_pitch)];
+                float c11 = (float)cf[(size_t)(ix + 1 + (iy + 1) * coeff_pitch)];
+                float fracx = fx - (float)ix, fracy = fy - (float)iy;
+                float b = (c00 * (1.0f - fracx) + c01 * fracx) * (1.0f - fracy)
+                        + (c10 * (1.0f - fracx) + c11 * fracx) * fracy;
+                float c = b * (1.0f / 255.0f);
+                int u = (int)us[(size_t)(x + y * pitch)];
+                float r = (float)s + (float)(s - u) * c + 0.5f;
+                if (r < (float)l) r = (float)l;
+                else if (r > (float)h) r = (float)h;
+                out.push_back((int)r);
+            }
+        }
+    } else if (mode == 'W') {
+        long long width = g_p(v, i), height = g_p(v, i), pitch = g_p(v, i);
+        long long coeff_pitch = g_p(v, i), qph = g_p(v, i), nC = g_p(v, i);
+        std::vector<long long> cf((size_t)nC);
+        for (long long k = 0; k < nC; k++) cf[(size_t)k] = g_p(v, i);
+        (void)pitch; (void)qph; /* shape-only */
+        for (long long y = 0; y < height; y++) {
+            for (long long x = 0; x < width; x++) {
+                float fx = (float)x * (1.0f / 8.0f);
+                float fy = (float)y * (1.0f / 8.0f);
+                int ix = (int)fx, iy = (int)fy;
+                float c00 = (float)cf[(size_t)(ix + iy * coeff_pitch)];
+                float c01 = (float)cf[(size_t)(ix + 1 + iy * coeff_pitch)];
+                float c10 = (float)cf[(size_t)(ix + (iy + 1) * coeff_pitch)];
+                float c11 = (float)cf[(size_t)(ix + 1 + (iy + 1) * coeff_pitch)];
+                float fracx = fx - (float)ix, fracy = fy - (float)iy;
+                float b = (c00 * (1.0f - fracx) + c01 * fracx) * (1.0f - fracy)
+                        + (c10 * (1.0f - fracx) + c11 * fracx) * fracy;
+                out.push_back((int)b);
             }
         }
     } else {

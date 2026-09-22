@@ -9,7 +9,8 @@ original author anything.
 
 - **Package under verification:** `src/opencl/kfm/kernels/kfm_deblock_rig.cl`
   (8 kernels + 2 tables at handoff, all `// RIG-VERIFY`; 6 kernels + 2 tables
-  have since graduated — only the 2 sharpen kernels remain — deliberately separated from the
+  have since graduated — only the 2 sharpen kernels remain (deterministic
+  behaviour pinned by mirror+golden; device run still required) — deliberately separated from the
   verified `kfm_deblock.cl`).
 - **Ground truth:** `rigaya/AviSynthCUDAFilters`, `KFM/Deblock.cu`, commit
   `cceb8da0e623e6bf5eea2cf655b06d4428e1600b` (§2).
@@ -35,8 +36,8 @@ original author anything.
 | 4 | `kf_max_h` | `kl_max_h` | `cpu_max_h` (exact) | easy — **GRADUATED** |
 | 5 | `kf_scale_qp` | `kl_scale_qp` | `cpu_scale_qp` (exact) | easy — **GRADUATED** |
 | 6 | `kf_sharpen_coeff` | `kl_sharpen_coeff` | `cpu_sharpen_coeff` (exact) | easy — **GRADUATED** |
-| 7 | `kf_sharpen` | `kl_sharpen` | `cpu_sharpen` (differs: guarded borders, no quirk) | hard (texture gap + quirk — device run required) |
-| 8 | `kf_show_sharpen_coeff` | `kl_show_sharpen_coeff` | `cpu_show_sharpen_coeff` (exact for the manual form) | medium (mirror+golden pins it; device run closes the texture gap) |
+| 7 | `kf_sharpen` | `kl_sharpen` | `cpu_sharpen` (differs: guarded borders, no quirk) | hard (texture gap + quirk — device run required) — **PINNED** (mirror+golden; not graduated) |
+| 8 | `kf_show_sharpen_coeff` | `kl_show_sharpen_coeff` | `cpu_show_sharpen_coeff` (exact for the manual form) | medium (mirror+golden pins it; device run closes the texture gap) — **PINNED** (not graduated) |
 
 Plus two file-scope tables (`g_ldither`, `g_sharpen_coeff`), the
 `kf_sharpen_bilinear` helper, and a private copy
@@ -277,7 +278,7 @@ kernel void kf_sharpen_coeff(__global uchar* dst, int width, int height, int pit
 - Integer; sweep `qp` over 0–65535 with emphasis on boundaries
   (`q` = 24/25 i.e. `qp` = 199/200/207).
 
-### 4.5 `kf_sharpen` (device run required — do last, after §4.6)
+### 4.5 `kf_sharpen` — **PINNED**, device run required (do last, after §4.6)
 
 ```c
 kernel void kf_sharpen(
@@ -334,7 +335,7 @@ Must-check facts:
    output: expect exact match almost everywhere with rare ±1 diffs at
    truncation boundaries; characterise, do not hand-wave.
 
-### 4.6 `kf_show_sharpen_coeff`
+### 4.6 `kf_show_sharpen_coeff` — **PINNED**, device run required
 
 ```c
 kernel void kf_show_sharpen_coeff(

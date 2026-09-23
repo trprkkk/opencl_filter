@@ -182,8 +182,9 @@ To get a working deinterlacer you must port the mvtools-equivalent layers:
   and five more CombingAnalyze/CompareFields helpers from the same file
   (`kf_average`, `kf_max`, `kf_merge_uvflags`, `kf_copy_border`,
   `kf_analyze_frame`, all ALG-VERIFIED), plus the padded-frame copies
-  `kf_copy_pad`/`kf_copy_pad_2plane` and the ExtendBlocks ping-pong
-  `kf_max_extend_blocks_h/v` (ALG-VERIFIED) — `KFMFilterBase.cu` is now
+  `kf_copy_pad`/`kf_copy_pad_2plane`, the ExtendBlocks ping-pong
+  `kf_max_extend_blocks_h/v` and the plain plane utilities
+  `kf_copy`/`kf_copy_2plane`/`kf_fill` (all ALG-VERIFIED) — `KFMFilterBase.cu` is now
   fully ported (KFMKernel.cu itself is inventoried host-only, no device
   kernels; see `docs/KFM_PORT_SPEC.md`).
   **KNoiseClip** (`kf_noise_clip`, from DecombeUCF.cu, in `kfm_noiseclip.cl`)

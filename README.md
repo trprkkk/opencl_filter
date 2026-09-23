@@ -155,10 +155,13 @@ Makefile                       # make test  (no OpenCL required)
   the padded-frame copies `kf_copy_pad`/`kf_copy_pad_2plane` (lane-swap
   quirk proven to cancel; no upstream CPU twin) and the ExtendBlocks
   ping-pong `kf_max_extend_blocks_h/v` (composed h->v proven equal to the
-  in-place CPU twin). These plus `kf_min_frames`/`kf_and_coefs` complete
+  in-place CPU twin), and the plain plane utilities `kf_copy` /
+  `kf_copy_2plane` (3D grid over the plane pair) / `kf_fill` (runtime value;
+  also covers `kl_fill<*,0>`). These plus `kf_min_frames`/`kf_and_coefs`
+  complete
   KAnalyzeStatic's kernel set (only the VPAD-pad host assembly remains,
   `// RIG-VERIFY`); `KFMFilterBase.cu` itself is now fully ported.
-  **ALG-VERIFIED** via `python/run_kfm_filterbase.py` (2650 cases,
+  **ALG-VERIFIED** via `python/run_kfm_filterbase.py` (3100 cases,
   integer-exact).
 - `kfm_noiseclip.cl`: **KFM KNoiseClip** — `kf_noise_clip`, faithful to
   `cpu_noise_clip`/`dev_limitter` (KFM/DecombeUCF.cu, MIT). Self-contained

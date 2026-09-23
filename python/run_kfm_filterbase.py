@@ -858,11 +858,84 @@ def main():
                     break
             if total >= 3: break
 
+    # Y: copy (incl. the CombingAnalyze field-copy shape: doubled pitch)
+    for t in range(150):
+        bits = rng.choice([8, 8, 16])
+        maxv = 255 if bits == 8 else 65535
+        width = rng.randint(1, 48)
+        height = rng.randint(1, 32)
+        if t % 4 == 3:  # field-copy shape: even height, doubled pitch
+            height = rng.choice([2, 4, 6, 8, 12, 16, 24])
+            pitch = 2 * width + rng.choice([0, 0, 2, 4])
+        else:
+            pitch = width + rng.choice([0, 0, 1, 2, 3])
+        n = pitch * height
+        src = [rng.randint(0, maxv) for _ in range(n)]
+        hdr = [ord('Y'), width, height, pitch, n]
+        got = run_mirror(hdr + src)
+        exp = [src[xx + yy * pitch]
+               for yy in range(height) for xx in range(width)]
+        total += 1
+        if got != exp:
+            ok = False
+            for i, (g, e) in enumerate(zip(got, exp)):
+                if g != e:
+                    print("copy MISMATCH", width, height, "px", i, g, e)
+                    break
+
+    # Q: copy_2plane (plane independence both ways)
+    for t in range(150):
+        bits = rng.choice([8, 8, 16])
+        maxv = 255 if bits == 8 else 65535
+        width = rng.randint(1, 40)
+        height = rng.randint(1, 28)
+        pitch = width + rng.choice([0, 0, 1, 2])
+        n = pitch * height
+        s0 = [rng.randint(0, maxv) for _ in range(n)]
+        craft = t % 3
+        if craft == 0:
+            s1 = [rng.randint(0, maxv) for _ in range(n)]
+        elif craft == 1:  # identical planes
+            s1 = list(s0)
+        else:  # complementary: every pixel differs
+            s1 = [(v + 1) % (maxv + 1) for v in s0]
+        hdr = [ord('Q'), width, height, pitch, n]
+        got = run_mirror(hdr + s0 + s1)
+        exp = ([s0[xx + yy * pitch] for yy in range(height)
+                for xx in range(width)] +
+               [s1[xx + yy * pitch] for yy in range(height)
+                for xx in range(width)])
+        total += 1
+        if got != exp:
+            ok = False
+            for i, (g, e) in enumerate(zip(got, exp)):
+                if g != e:
+                    print("copy_2plane MISMATCH", width, height, "px", i, g, e)
+                    break
+
+    # L: fill (v sweep incl. 0/255/256/65535 edges + production zero)
+    for t in range(150):
+        bits = rng.choice([8, 8, 16])
+        maxv = 255 if bits == 8 else 65535
+        width = rng.randint(1, 48)
+        height = rng.randint(1, 32)
+        pitch = width + rng.choice([0, 1, 2])
+        v = rng.choice([0, 0, 0, 1, 2, 127, 128, 255, 256, 1000, 32767,
+                        32768, 65534, 65535, rng.randint(0, maxv)])
+        v = min(v, maxv)
+        hdr = [ord('L'), width, height, pitch, v]
+        got = run_mirror(hdr)
+        exp = [v] * (width * height)
+        total += 1
+        if got != exp:
+            ok = False
+            print("fill MISMATCH", width, height, v, got[:4], exp[:4])
+
     print(f"KFM FilterBase (calc_combe/merge_uvcoefs/extend_coef2/"
           f"apply_uvcoefs_420/padv/padh/merge_block/average/max/"
           f"merge_uvflags/copy_border/analyze_frame/copy_pad/"
           f"copy_pad_2plane/extend_blocks_h/extend_blocks_v/"
-          f"extend_blocks_hv): "
+          f"extend_blocks_hv/copy/copy_2plane/fill): "
           f"{'PASS' if ok else 'FAIL'} ({total} cases)")
     return 0 if ok else 1
 

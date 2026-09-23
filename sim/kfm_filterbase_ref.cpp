@@ -83,6 +83,12 @@
  *     U extend_hv    : U nBlkX nBlkY pitch  nP  src(nP); h into tmp then v
  *                      (nBlkX,nBlkY >= 2; the CPU twin is OOB at 1).
  *                      -> output nBlkX*nBlkY
+ *     Y copy         : Y width height pitch  nP  src(nP)
+ *                      -> output width*height
+ *     Q copy_2plane  : Q width height pitch  nP  s0(nP) s1(nP)
+ *                      -> output plane 0 then plane 1 (each width*height)
+ *     L fill         : L width height pitch v
+ *                      -> output width*height, all v
  */
 #include <cstdio>
 #include <cstdlib>
@@ -360,6 +366,21 @@ int main(int argc,char**argv){
             else { int a=tmp[off],b=tmp[off+pitch]; v=(a>b)?a:b; }
             out.push_back(v);
         }
+    } else if(m=='Y'){
+        int width=rd(),height=rd(),pitch=rd(),nP=rd();
+        vector<int> src=read(nP);
+        for(int yy=0;yy<height;yy++)for(int xx=0;xx<width;xx++)
+            out.push_back(src[(size_t)(xx+yy*pitch)]);
+    } else if(m=='Q'){
+        int width=rd(),height=rd(),pitch=rd(),nP=rd();
+        vector<int> s0=read(nP),s1=read(nP);
+        for(int zz=0;zz<2;zz++)for(int yy=0;yy<height;yy++)for(int xx=0;xx<width;xx++)
+            out.push_back((zz==0?s0:s1)[(size_t)(xx+yy*pitch)]);
+    } else if(m=='L'){
+        int width=rd(),height=rd(),pitch=rd(),v=rd();
+        (void)pitch;
+        for(int yy=0;yy<height;yy++)for(int xx=0;xx<width;xx++)
+            out.push_back(v);
     } else { fprintf(stderr,"bad mode %c\n",m); return 2; }
     FILE* o=fopen(argv[2],"w");
     for(int v:out)fprintf(o,"%d\n",v);

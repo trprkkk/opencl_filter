@@ -23,9 +23,10 @@
  * MergeBlock blender kf_merge_block (used by KPatchCombe/KFMSwitch), and the
  * five CombingAnalyze/CompareFields helpers kf_average, kf_max,
  * kf_merge_uvflags, kf_copy_border and kf_analyze_frame, the padded-frame
- * copies kf_copy_pad / kf_copy_pad_2plane, and the ExtendBlocks ping-pong
- * pair kf_max_extend_blocks_h / kf_max_extend_blocks_v.
- * All sixteen are per-pixel / per-plane integer ops whose
+ * copies kf_copy_pad / kf_copy_pad_2plane, the ExtendBlocks ping-pong
+ * pair kf_max_extend_blocks_h / kf_max_extend_blocks_v, and the plain
+ * plane utilities kf_copy, kf_copy_2plane and kf_fill.
+ * All nineteen are per-pixel / per-plane integer ops whose
  * channels are independent, so the CUDA 4-wide vectorisation is equivalent to a
  * scalar translation (bit-identical for plane width a multiple of 4; the
  * scalar twins kf_max / kf_merge_uvflags / kf_copy_border are exact twins at
@@ -581,4 +582,64 @@ kernel void kf_max_extend_blocks_v(
         }
         dstp[off] = (uchar)v;
     }
+}
+
+/* ---------------------------------------------------------------------------
+ * kf_copy — plain plane copy (kl_copy twin, KFMFilterBase.cu; instantiated
+ * uint8/uint16/uchar4/ushort4 upstream, lanes independent).  Production shapes
+ * include the CombingAnalyze field copy (pitch*2 over height/2 rows — just a
+ * pitch value here).  Grid: 2D (width, height).
+ * // ALG-VERIFIED via python/run_kfm_filterbase.py.
+ * -------------------------------------------------------------------------*/
+kernel void kf_copy(
+    __global       PX* __restrict dst,
+    __global const PX* __restrict src,
+    int width, int height, int pitch)
+{
+    int x = (int)get_global_id(0);
+    int y = (int)get_global_id(1);
+    if (x >= width || y >= height) return;
+    dst[x + y * pitch] = src[x + y * pitch];
+}
+
+/* ---------------------------------------------------------------------------
+ * kf_copy_2plane — dual-plane copy (kl_copy_2plane twin, KFMFilterBase.cu;
+ * used by CombingAnalyze UV field copy and KDeband UV copy).  Upstream selects
+ * the plane pair with blockIdx.z (gridDim.z = 2); here the 3rd grid dimension
+ * (launch contract: exactly 2) plays that role via get_global_id(2).
+ * Grid: 3D (width, height, 2).
+ * // ALG-VERIFIED via python/run_kfm_filterbase.py.
+ * -------------------------------------------------------------------------*/
+kernel void kf_copy_2plane(
+    __global       PX* __restrict dst0,
+    __global       PX* __restrict dst1,
+    __global const PX* __restrict src0,
+    __global const PX* __restrict src1,
+    int width, int height, int pitch)
+{
+    int x = (int)get_global_id(0);
+    int y = (int)get_global_id(1);
+    int z = (int)get_global_id(2);
+    if (x >= width || y >= height || z >= 2) return;
+    __global       PX* __restrict dst = (z == 0) ? dst0 : dst1;
+    __global const PX* __restrict src = (z == 0) ? src0 : src1;
+    dst[x + y * pitch] = src[x + y * pitch];
+}
+
+/* ---------------------------------------------------------------------------
+ * kf_fill — plane fill with a runtime value (kl_fill twin, KDeband.cu; also
+ * covers KFMFilterBase.cu's kl_fill<pixel_t, 0>, whose template value is only
+ * ever 0 upstream — VHelper::make(0) is the zero lane(s), i.e. v = 0 here).
+ * Production use is UV zeroing (KDeband) and flag-plane zeroing (FilterBase).
+ * Grid: 2D (width, height).
+ * // ALG-VERIFIED via python/run_kfm_filterbase.py.
+ * -------------------------------------------------------------------------*/
+kernel void kf_fill(
+    __global PX* __restrict dst, int v,
+    int width, int height, int pitch)
+{
+    int x = (int)get_global_id(0);
+    int y = (int)get_global_id(1);
+    if (x >= width || y >= height) return;
+    dst[x + y * pitch] = (PX)v;
 }

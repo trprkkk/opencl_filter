@@ -180,12 +180,13 @@ item (CUDA may fuse `a*b+c` into fma; <1 ulp difference).
 kf_extend_coef2 / kf_apply_uvcoefs_420 / kf_padv / kf_padh / kf_merge_block /
 kf_average / kf_max / kf_merge_uvflags / kf_copy_border / kf_analyze_frame /
 kf_copy_pad / kf_copy_pad_2plane / kf_max_extend_blocks_h /
-kf_max_extend_blocks_v, src/opencl/kfm/kernels/kfm_filterbase.cl)
+kf_max_extend_blocks_v / kf_copy / kf_copy_2plane / kf_fill,
+src/opencl/kfm/kernels/kfm_filterbase.cl)
 
 `KFMFilterBase.cu` is the shared base class and defines the coefficient kernels
 that KAnalyzeStatic is assembled from (`cpu_*` twins exist in the same file).
-Sixteen are ported here and `// ALG-VERIFIED` via `python/run_kfm_filterbase.py`
-(2650 cases) against the CPU mirror `sim/kfm_filterbase_ref.cpp` and an
+Nineteen are ported here and `// ALG-VERIFIED` via `python/run_kfm_filterbase.py`
+(3100 cases) against the CPU mirror `sim/kfm_filterbase_ref.cpp` and an
 independent Python golden. All are per-pixel/per-plane integer ops (no float),
 so the CUDA 4-wide vectorisation is equivalent to a scalar port.
 
@@ -290,6 +291,15 @@ so the CUDA 4-wide vectorisation is equivalent to a scalar port.
   golden runs the in-place path, so their agreement proves the composition
   equals the CPU twin (for nBlkX,nBlkY ≥ 2; at 1 the CPU twin reads out of
   bounds, so production block counts stay ≥ 2).
+- `kf_copy` — plain same-pitch plane copy (`kl_copy`; uint8/uint16/uchar4/
+  ushort4 instantiations, lanes independent). Covers the CombingAnalyze
+  field-copy production shape (pitch*2 over height/2 rows).
+- `kf_copy_2plane` — dual-plane copy (`kl_copy_2plane`; CombingAnalyze UV
+  field copy + KDeband UV copy). Upstream's blockIdx.z plane selector becomes
+  the 3rd grid dimension (launch contract: exactly 2).
+- `kf_fill` — plane fill with a runtime value (KDeband `kl_fill` twin; also
+  covers FilterBase `kl_fill<pixel_t, 0>`, whose template value is only ever 0
+  upstream). Production use is UV/flag-plane zeroing.
 
 These, together with `kf_min_frames` and `kf_and_coefs` (in kfm_mergestatic.cl),
 make KAnalyzeStatic's kernel set complete (see the MergeStatic section for the

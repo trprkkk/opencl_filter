@@ -267,6 +267,13 @@ long long kernel_plane_sad(const Plane<PX>& a,const Plane<PX>& b){
     return sum;
 }
 
+/* kl_init_sad twin: zero a float SAD buffer of length N. Upstream's launch is
+ * <<<1, radius*2*3>>> with no length arg; the length+guard follows the repo
+ * convention (kf_init_uint64). The driver prefills with deterministic garbage
+ * (sanity-checked nonzero) so a broken zeroing loop would show in the file. */
+static void kernel_init_sad(float* sad,int N){
+    for(int i=0;i<N;++i)sad[i]=0.0f;}
+
 /* ---------------- driver ---------------- */
 template<typename PX>
 bool run_all(const string& inDir,const string& outDir,const ResamplingProgram& progV,const ResamplingProgram& progH,int FIELD_H){
@@ -308,6 +315,15 @@ bool run_all(const string& inDir,const string& outDir,const ResamplingProgram& p
     {auto o=out(W,H);kernel_wiener_v(a,o);writePlane(outDir,"wiener_v",o);}
     {auto o=out(W,H);kernel_wiener_h(a,o);writePlane(outDir,"wiener_h",o);}
     { FILE* f=fopen((outDir+"/plane_sad.txt").c_str(),"w"); fprintf(f,"%lld\n",kernel_plane_sad(a,b)); fclose(f); }
+    { const int NS[]={1,6,12,18,24,30,61,63,64,65,255,256,257,2048};
+      for(int N:NS){ vector<float> buf(N);
+        for(int i=0;i<N;++i){ unsigned u=(unsigned)(i*2654435761u+11u); buf[i]=(float)(u%1000)/1000.0f+0.001f; }
+        int nz=0; for(float v:buf) if(v!=0.0f) nz++;
+        if(nz==0){ fprintf(stderr,"init_sad prefill vacuous N=%d\n",N); return false; }
+        kernel_init_sad(buf.data(),N);
+        FILE* f=fopen((outDir+"/init_sad_"+to_string(N)+".txt").c_str(),"w");
+        for(float v:buf) fprintf(f,"%.1f\n",v);
+        fclose(f); } }
     return true;
 }
 

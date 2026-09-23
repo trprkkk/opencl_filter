@@ -82,6 +82,7 @@ bit-for-bit via `make test`, both 8-bit and 16-bit):
 | `kl_vertical_wiener` (MVKernel.cu, KMSuper "sharp") | `kt_vertical_wiener` | ✔ |
 | `kl_horizontal_wiener` (MVKernel.cu, KMSuper "sharp") | `kt_horizontal_wiener` | ✔ |
 | `kl_calculate_sad` frame-level (Kernel.cu temporal soften) | `kt_plane_sad` | ✔² |
+| `kl_init_sad` (temporal soften SAD zeroing, `<<<1, radius*2*3>>>`) | `kt_init_sad` | ✔ |
 
 ² `kt_plane_sad` is the frame/plane absolute-diff sum (scene-change gate). The
 CUDA block/warp reductions are intrinsic/layout-specific; the *metric* is the
@@ -124,10 +125,11 @@ them (see `docs/MV_PORT_SPEC.md` §6.1/§6.2 and `docs/BLOCKSEARCH_MODEL.md` §8
 
 The `Kernel.cu` no-motion AVS filter-function kernels are all covered by
 `ktgmc_simple.cl` already. Of the extra names there, `kl_logic1`/`kl_logic3`
-(KLogic1/KLogic3) are never instantiated, `kl_copy_boarder1` has no caller and
-`kl_copy_boarder1_v` is inside `#if 0`, and `kl_init_sad`/`kl_calculate_sad`
-(the temporal-soften scene-change SAD) map to the scalar `kt_plane_sad` plus a
-host-side threshold compare — so none of them needs a new kernel.
+(KLogic1/KLogic3) are never instantiated, `kl_copy_boarder1` has no caller and `kl_copy_boarder1_v` is inside `#if 0`
+(both dead, no port), `kl_calculate_sad` (the temporal-soften scene-change
+SAD) maps to the scalar `kt_plane_sad` plus a host-side threshold compare,
+and `kl_init_sad` is ported 1:1 as `kt_init_sad` (ALG-VERIFIED) — no further
+kernels needed here.
 
 `GaussianFilter` (KGaussResize) is already implemented as a second
 `ResamplingFunction` in the reference; add its `.cl` variants next.

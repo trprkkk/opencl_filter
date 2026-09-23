@@ -118,7 +118,8 @@ the plane pitch/stride arithmetic exact is the crux of on-rig verification.
 
 In `src/opencl/ktgmc/kernels/ktgmc_simple.cl` (bit-for-bit CPU+Python verified,
 8 & 16 bit): the two Wiener interpolation kernels (`kt_vertical_wiener`,
-`kt_horizontal_wiener`) and `kt_plane_sad` (frame SAD metric) plus the 22
+`kt_horizontal_wiener`), `kt_plane_sad` (frame SAD metric) and `kt_init_sad`
+(SAD-buffer zeroing) plus the 22
 per-plane KTGMC kernels.
 
 `src/opencl/ktgmc/kernels/ktgmc_motion.cl` holds the self-contained MV pieces:

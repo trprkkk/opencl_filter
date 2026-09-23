@@ -443,6 +443,10 @@ def run_bits(bits):
     sad_ref=[int(l) for l in open(os.path.join(out_dir,"plane_sad.txt"))][0]
     sad_gold=kernel_plane_sad(a,b,W,A_H)
     if sad_ref!=sad_gold: ok=False; print(f"  MISMATCH plane_sad: {sad_ref} vs {sad_gold}")
+    for N in (1,6,12,18,24,30,61,63,64,65,255,256,257,2048):
+        vals=[float(l) for l in open(os.path.join(out_dir,f"init_sad_{N}.txt"))]
+        if len(vals)!=N or any(v!=0.0 for v in vals):
+            ok=False; print(f"  MISMATCH init_sad N={N}: got {len(vals)} vals")
 
     for name,golden in _gold.items():
         got=read_plane(os.path.join(out_dir,name+".raw"), W, out_h[name], bits)

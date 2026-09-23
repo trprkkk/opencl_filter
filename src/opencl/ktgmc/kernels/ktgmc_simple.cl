@@ -751,3 +751,19 @@ kernel void kt_plane_sad(
         atomic_add(out, d);
     }
 }
+
+/* ---------------------------------------------------------------------------
+ * kt_init_sad — zero the float SAD accumulation buffer (kl_init_sad twin,
+ * KTGMC/Kernel.cu; launch <<<1, radius*2*3>>> ahead of the temporal-filter
+ * SAD accumulation).  Upstream takes no length (launch-sized); the length
+ * arg + guard is the repo convention (kf_init_uint64).  Production N =
+ * radius*2*3 floats.  Grid: 1D (N).
+ * // ALG-VERIFIED via python/run_validation.py.
+ * -------------------------------------------------------------------------*/
+kernel void kt_init_sad(
+    __global float* __restrict sad, int length)
+{
+    int i = (int)get_global_id(0);
+    if (i >= length) return;
+    sad[i] = 0.0f;
+}

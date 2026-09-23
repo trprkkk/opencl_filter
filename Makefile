@@ -39,6 +39,7 @@ test: ref lint
 	python3 python/run_kfm_decombeucf.py
 	python3 python/run_avscuda_merge.py
 	python3 python/run_avscuda_filters.py
+	python3 python/run_avscuda_convert.py
 
 clean:
 	rm -rf build

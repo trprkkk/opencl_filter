@@ -229,6 +229,14 @@ Makefile                       # make test  (no OpenCL required)
   interleaved per-channel XOR). **ALG-VERIFIED** via
   `python/run_avscuda_filters.py` (750 cases vs
   `sim/avscuda_filters_ref.cpp`). Family map in `docs/AVSCUDA_PORT_SPEC.md`.
+- `avscuda_convert.cl`: **AvsCUDA ConvertBits** — ordered-Bayer down-convert
+  (`ka_convert_lower_dither_u8/u16`, verbatim tables), truncating down-convert
+  (`ka_convert_lower_nodither_u8/u16`), shift up-convert
+  (`ka_convert_higher_from_u8/from_u16`), float→int (`ka_convert_from_float_u8/
+  u16`, rgy clamp macro spelled out: NaN yields MAX_VAL) and int→float
+  (`ka_convert_to_float_from_u8/from_u16`). **ALG-VERIFIED** via
+  `python/run_avscuda_convert.py` (1320 cases vs
+  `sim/avscuda_convert_ref.cpp`, incl. NaN/Inf edges).
 
 ## How the port is validated (no GPU/OpenCL needed)
 

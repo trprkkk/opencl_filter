@@ -10,7 +10,7 @@ resizer) — no KTGMC/KFM dependencies. Kernel prefix: `ka_`.
 |---|---|---|
 | `filters/merge.cu` | `kl_merge_plane`, `kl_average_plane` | ✔ batch-1 (8 scalar kernels, ALG-VERIFIED) |
 | `filters/Filters.cu` | `kl_invert_plane`, `kl_invert_rgb` | ✔ batch-1 (same) |
-| `filters/Convert.cu` (or Convert.*) | 5 (bit-depth convert + dither) | roadmap §4 |
+| `filters/Convert.cu` | 5 (`lower_dither`, `lower_no_dither`, `higher`, `from_float`, `to_float`) | ✔ batch-2 (10 scalar kernels, ALG-VERIFIED) |
 | `filters/Conditional.cu` (or Conditional.*) | 5 (`init_sum`/`sum`/`sad`/`init_hist`/`count_hist`) | roadmap §4 |
 | `filters/Resample.cu` (~2833 lines) | 4 (shared-mem coeff resamplers) | roadmap §4 |
 
@@ -59,6 +59,18 @@ Word-overhang note: upstream rounds rows up to whole words, writing up to
 take width = exact elements and write exactly the row — the only divergence,
 and only in the overhang bytes (harmless with SIMD-aligned pitches).
 
+Batch-2 (`avscuda_convert.cl`, 10 kernels — the five templates split by
+element width per the BitsToType rule) adds the ConvertBits core: ordered
+Bayer down-convert (`ka_convert_lower_dither_u8/u16`, verbatim c_dither2/4/6/8
+tables, shifts always even in {2,4,6,8}), truncating down-convert
+(`ka_convert_lower_nodither_u8/u16` — plain `>>SHIFT`; the `+HALF` rounding
+line is commented out upstream, transcribed as-is), shift up-convert
+(`ka_convert_higher_from_u8/from_u16`), float→int (`ka_convert_from_float_u8/
+u16`, chroma adds HALF; the rgy clamp macro is spelled out so NaN yields
+MAX_VAL like upstream — NOT OpenCL's builtin clamp, which yields 0; 16-bit
+MAX_VAL is 65280) and int→float (`ka_convert_to_float_from_u8/from_u16`,
+`FACTOR = 1.0f/MAX_VAL`, chroma subtracts HALF first; unfused float32).
+
 **ALG-VERIFIED** via `python/run_avscuda_merge.py` (620 cases:
 `sim/avscuda_merge_ref.cpp` vs independent golden; dual-pitch, host-formula
 weights incl. band edges 0.4961/0.5039 and 0/1, crafted value edges, float
@@ -69,15 +81,16 @@ channel/uniform/random masks, non-mult-4 widths, RGB full+partial masks).
 
 - `src/opencl/avscuda/kernels/avscuda_merge.cl` — the 4 merge/average kernels.
 - `src/opencl/avscuda/kernels/avscuda_filters.cl` — the 4 invert kernels.
-- `sim/avscuda_merge_ref.cpp`, `sim/avscuda_filters_ref.cpp` — CPU mirrors
-  (int-token protocol, `A`/`B`/`C`/`D` modes; float as bit-pattern ints).
-- `python/run_avscuda_merge.py`, `python/run_avscuda_filters.py` — goldens,
-  wired into `make test`.
+- `src/opencl/avscuda/kernels/avscuda_convert.cl` — the 10 convert kernels.
+- `sim/avscuda_merge_ref.cpp`, `sim/avscuda_filters_ref.cpp`,
+  `sim/avscuda_convert_ref.cpp` — CPU mirrors (int-token protocol;
+  float as bit-pattern ints).
+- `python/run_avscuda_merge.py` (620 cases), `python/run_avscuda_filters.py`
+  (750), `python/run_avscuda_convert.py` (1320: all producible (shift,bits)
+  pairs, NaN/Inf float edges) — goldens, wired into `make test`.
 
-## 4. Roadmap (remaining 14 templates)
+## 4. Roadmap (remaining 9 templates)
 
-- **Convert (5)**: bit-depth conversion + dithering kernels. Next batch;
-  needs the dither-matrix / error-diffusion ground truth read first.
 - **Conditional (5)**: `init_sum`/`sum`/`sad`/`init_hist`/`count_hist`
   reduction kernels (ConditionalReader-style frame metrics). Reductions need
   the repo's block-sum treatment (cf. `kf_add_block_sum`); host readback of

@@ -225,8 +225,10 @@ To get a working deinterlacer you must port the mvtools-equivalent layers:
   (`ka_merge`/`ka_merge_f32`/`ka_average`/`ka_average_f32`, in
   `avscuda_merge.cl`) and Invert (`ka_invert_plane_u8/u16/f32`,
   `ka_invert_rgb`, in `avscuda_filters.cl`), all ALG-VERIFIED (620+750
-  cases). Remaining: Convert 5 (bit-depth + dither), Conditional 5
-  (sum/sad/hist reductions), resample 4 (shared-mem coeff resizer); host
+  cases), plus batch-2 ConvertBits (`ka_convert_lower_dither/nodither`,
+  `ka_convert_higher`, `ka_convert_from/to_float`, 10 kernels in
+  `avscuda_convert.cl`, 1320 cases). Remaining: Conditional 5
+  (sum/sad/hist reductions) and resample 4 (shared-mem coeff resizer); host
   plumbings (`Copy.cu`, `memcpy_kernel`) and the debug OSD are excluded.
   See `docs/AVSCUDA_PORT_SPEC.md`.
 

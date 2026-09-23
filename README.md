@@ -215,6 +215,20 @@ Makefile                       # make test  (no OpenCL required)
   transcribed, with the host sequencing and rig proofs remaining open.
   Verification handoff spec for another agent:
   `docs/RIG_HANDOFF_KDEBLOCK.md`. Documented in `docs/KFM_PORT_SPEC.md`.
+- `avscuda_merge.cl`: **AvsCUDA Merge/MergeChroma/MergeLuma planar core** —
+  `ka_merge` (in-place weighted merge, dual pitch, >>15 SIMD/device scale;
+  the scalar-C >>16 fallback is a different weight scale, not a twin),
+  `ka_merge_f32`, `ka_average` (exact `average_plane_c` twin) and
+  `ka_average_f32` (device `(a+b)*0.5f` vs CPU `(a+b)/2.0f`, proven equal).
+  Host dispatch contract (average band / early-outs / YUY2-throws) pinned in
+  the file header. **ALG-VERIFIED** via `python/run_avscuda_merge.py`
+  (620 cases vs `sim/avscuda_merge_ref.cpp`, incl. band-edge weights).
+- `avscuda_filters.cl`: **AvsCUDA Invert** — `ka_invert_plane_u8/u16/f32`
+  (word-XOR lane transcription; planar full masks + packed channel masks;
+  exact row widths, no word overhang) and `ka_invert_rgb` (RGB24/48
+  interleaved per-channel XOR). **ALG-VERIFIED** via
+  `python/run_avscuda_filters.py` (750 cases vs
+  `sim/avscuda_filters_ref.cpp`). Family map in `docs/AVSCUDA_PORT_SPEC.md`.
 
 ## How the port is validated (no GPU/OpenCL needed)
 

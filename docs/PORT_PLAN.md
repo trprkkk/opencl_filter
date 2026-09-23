@@ -221,6 +221,14 @@ To get a working deinterlacer you must port the mvtools-equivalent layers:
   transcribed, with only host sequencing and rig proofs remaining open.
   Full KFM map + next candidates (DecombeUCF host pipelines / Deblock
   helpers) are in `docs/KFM_PORT_SPEC.md`.
+- **AvsCUDA** (`AvsCUDA/`, MIT): batch-1 done — the Merge planar core
+  (`ka_merge`/`ka_merge_f32`/`ka_average`/`ka_average_f32`, in
+  `avscuda_merge.cl`) and Invert (`ka_invert_plane_u8/u16/f32`,
+  `ka_invert_rgb`, in `avscuda_filters.cl`), all ALG-VERIFIED (620+750
+  cases). Remaining: Convert 5 (bit-depth + dither), Conditional 5
+  (sum/sad/hist reductions), resample 4 (shared-mem coeff resizer); host
+  plumbings (`Copy.cu`, `memcpy_kernel`) and the debug OSD are excluded.
+  See `docs/AVSCUDA_PORT_SPEC.md`.
 
 ## 6. AviSynth integration (device glue)
 

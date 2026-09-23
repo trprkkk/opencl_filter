@@ -246,6 +246,8 @@ Makefile                       # make test  (no OpenCL required)
   faithful `// RIG-VERIFY` transcriptions in `avscuda_conditional_rig.cl`
   (arrival order undefined upstream too; tolerance-based device comparison
   mandatory, not covered by `make test`).
+  Verification handoff spec for another agent:
+  `docs/RIG_HANDOFF_AVSCUDA_CONDITIONAL.md`.
 - `avscuda_resample.cl`: **AvsCUDA FilteredResizeH/V** — row/unit select
   (`ka_resize_v_pointresize[_f32]`, `ka_resize_h_pointresize_bytes`) and
   separable filters (`ka_resize_v_planar[_f32]`, `ka_resize_h_planar_u8/u16/

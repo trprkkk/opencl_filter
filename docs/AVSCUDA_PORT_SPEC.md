@@ -85,6 +85,9 @@ reductions are faithful // RIG-VERIFY transcriptions in
 `avscuda_conditional_rig.cl` (portable __local tree + CAS-loop float atomic;
 cross-block arrival order is undefined upstream too, so only a
 tolerance-based device comparison can verify them -- no mirror, no pin).
+Verification handoff spec for another agent:
+`docs/RIG_HANDOFF_AVSCUDA_CONDITIONAL.md` (device-run protocol, exact anchors
++ in-band criteria; terminal state `// RIG-COMPARED`, never ALG-VERIFIED).
 
 Batch-4 (`avscuda_resample.cl`, 8 kernels) ports the FilteredResizeH/V device
 paths: row/unit select (`ka_resize_v_pointresize[_f32]`, packed-aware byte

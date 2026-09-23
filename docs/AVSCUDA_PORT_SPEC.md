@@ -11,7 +11,7 @@ resizer) — no KTGMC/KFM dependencies. Kernel prefix: `ka_`.
 | `filters/merge.cu` | `kl_merge_plane`, `kl_average_plane` | ✔ batch-1 (8 scalar kernels, ALG-VERIFIED) |
 | `filters/Filters.cu` | `kl_invert_plane`, `kl_invert_rgb` | ✔ batch-1 (same) |
 | `filters/Convert.cu` | 5 (`lower_dither`, `lower_no_dither`, `higher`, `from_float`, `to_float`) | ✔ batch-2 (10 scalar kernels, ALG-VERIFIED) |
-| `filters/Conditional.cu` (or Conditional.*) | 5 (`init_sum`/`sum`/`sad`/`init_hist`/`count_hist`) | roadmap §4 |
+| `filters/ConditionalFunctions.cu` | 5 (`init_sum`/`sum`/`sad`/`init_hist`/`count_hist`) | ✔ batch-3 (15 kernels ALG-VERIFIED + 2 float // RIG-VERIFY) |
 | `filters/Resample.cu` (~2833 lines) | 4 (shared-mem coeff resamplers) | roadmap §4 |
 
 Total: 18 device-kernel templates. Excluded by census: `common/Copy.cu` and
@@ -71,6 +71,21 @@ MAX_VAL like upstream — NOT OpenCL's builtin clamp, which yields 0; 16-bit
 MAX_VAL is 65280) and int→float (`ka_convert_to_float_from_u8/from_u16`,
 `FACTOR = 1.0f/MAX_VAL`, chroma subtracts HALF first; unfused float32).
 
+Batch-3 (`avscuda_conditional.cl`, 15 kernels) covers the Conditional runtime
+metrics: counter/histogram zeroing (`ka_init_sum_u32/u64/f32`, `ka_init_hist`),
+AveragePlane sums (`ka_sum_pixels_u8/u16` x u32/u64, with the min(v,maxv)
+content clamp for u16), PlaneDifference SAD (`ka_sad_u8/u16` x u32/u64, single
+pitch) and MinMaxPlane histograms (`ka_count_hist_u8/u16/f32` over int
+counters). Integer reductions use one atomic per work-item (arrival-order-free;
+u32 wraparound pinned with oversized frames; u64 needs OpenCL 2.0 or
+cl_khr_int64_base_atomics). The float hist index spells out max(0,min(t,65535))
+so NaN yields 65535 like CUDA. Width-mult-4, the 32/64-bit host threshold and
+the average/SAD host divisions are pinned as contracts. The two FLOAT sum/SAD
+reductions are faithful // RIG-VERIFY transcriptions in
+`avscuda_conditional_rig.cl` (portable __local tree + CAS-loop float atomic;
+cross-block arrival order is undefined upstream too, so only a
+tolerance-based device comparison can verify them -- no mirror, no pin).
+
 **ALG-VERIFIED** via `python/run_avscuda_merge.py` (620 cases:
 `sim/avscuda_merge_ref.cpp` vs independent golden; dual-pitch, host-formula
 weights incl. band edges 0.4961/0.5039 and 0/1, crafted value edges, float
@@ -82,19 +97,20 @@ channel/uniform/random masks, non-mult-4 widths, RGB full+partial masks).
 - `src/opencl/avscuda/kernels/avscuda_merge.cl` — the 4 merge/average kernels.
 - `src/opencl/avscuda/kernels/avscuda_filters.cl` — the 4 invert kernels.
 - `src/opencl/avscuda/kernels/avscuda_convert.cl` — the 10 convert kernels.
+- `src/opencl/avscuda/kernels/avscuda_conditional.cl` — the 15 conditional
+  kernels; `avscuda_conditional_rig.cl` — the 2 float // RIG-VERIFY kernels.
 - `sim/avscuda_merge_ref.cpp`, `sim/avscuda_filters_ref.cpp`,
   `sim/avscuda_convert_ref.cpp` — CPU mirrors (int-token protocol;
   float as bit-pattern ints).
 - `python/run_avscuda_merge.py` (620 cases), `python/run_avscuda_filters.py`
   (750), `python/run_avscuda_convert.py` (1320: all producible (shift,bits)
-  pairs, NaN/Inf float edges) — goldens, wired into `make test`.
+  pairs, NaN/Inf float edges) and `python/run_avscuda_conditional.py`
+  (1320: u32-wrap oversized frames, clamped content, NaN hist indices) —
+  goldens, wired into `make test`. `sim/avscuda_conditional_ref.cpp` is the
+  15-mode mirror (int-token protocol; u64 sums print as one decimal).
 
-## 4. Roadmap (remaining 9 templates)
+## 4. Roadmap (remaining 4 templates)
 
-- **Conditional (5)**: `init_sum`/`sum`/`sad`/`init_hist`/`count_hist`
-  reduction kernels (ConditionalReader-style frame metrics). Reductions need
-  the repo's block-sum treatment (cf. `kf_add_block_sum`); host readback of
-  partial sums is host glue.
 - **Resample (4)**: the ~2833-line resizer with shared-memory coefficient
   staging. Largest batch; shared-mem → `__local` transcription with the
   rig-bound layout proofs, like the KDeblock texture/sharpen work.

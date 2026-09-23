@@ -76,4 +76,13 @@ ATOMIC_FUNCS
 /* macro (not overloaded fns — C has no overloading): parses for both int and
  * unsigned long args, matching the OpenCL atomic_add builtin's call shape. */
 #define atomic_add(p, v) (__sync_fetch_and_add((p), (v)))
+/* 64-bit base atomics (cl_khr_int64_base_atomics call shape; parse-only). */
+#define atom_add(p, v) (__sync_fetch_and_add((p), (v)))
 static int atomic_max(__global int* p, int v){ return __sync_fetch_and_max(p,v);}
+/* Parse-only stubs for the float-atomic CAS loop in
+ * avscuda_conditional_rig.cl (never executed; the real device code uses
+ * true bit-reinterpretation and hardware CAS). */
+#define as_float(x)  ((float)(x))
+#define as_uint(x)   ((uint)(x))
+static uint atomic_cmpxchg(__global uint* p, uint cmp, uint v){
+    return __sync_val_compare_and_swap(p, cmp, v); }

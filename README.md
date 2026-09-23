@@ -237,6 +237,15 @@ Makefile                       # make test  (no OpenCL required)
   (`ka_convert_to_float_from_u8/from_u16`). **ALG-VERIFIED** via
   `python/run_avscuda_convert.py` (1320 cases vs
   `sim/avscuda_convert_ref.cpp`, incl. NaN/Inf edges).
+- `avscuda_conditional.cl`: **AvsCUDA Conditional metrics** — counter/hist
+  inits, AveragePlane sums, PlaneDifference SAD (u8/u16 x u32/u64) and MinMax
+  histograms (u8/u16/f32; NaN index yields 65535). Integer reductions use
+  per-item atomics (order-free); u32 wraparound pinned. **ALG-VERIFIED** via
+  `python/run_avscuda_conditional.py` (1320 cases vs
+  `sim/avscuda_conditional_ref.cpp`). The float sum/SAD reductions are
+  faithful `// RIG-VERIFY` transcriptions in `avscuda_conditional_rig.cl`
+  (arrival order undefined upstream too; tolerance-based device comparison
+  mandatory, not covered by `make test`).
 
 ## How the port is validated (no GPU/OpenCL needed)
 

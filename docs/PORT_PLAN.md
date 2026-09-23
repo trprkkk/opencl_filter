@@ -227,10 +227,11 @@ To get a working deinterlacer you must port the mvtools-equivalent layers:
   `ka_invert_rgb`, in `avscuda_filters.cl`), all ALG-VERIFIED (620+750
   cases), plus batch-2 ConvertBits (`ka_convert_lower_dither/nodither`,
   `ka_convert_higher`, `ka_convert_from/to_float`, 10 kernels in
-  `avscuda_convert.cl`, 1320 cases). Remaining: Conditional 5
-  (sum/sad/hist reductions) and resample 4 (shared-mem coeff resizer); host
-  plumbings (`Copy.cu`, `memcpy_kernel`) and the debug OSD are excluded.
-  See `docs/AVSCUDA_PORT_SPEC.md`.
+  `avscuda_convert.cl`, 1320 cases), plus batch-3 Conditional metrics (15
+  kernels in `avscuda_conditional.cl`, 1320 cases; the 2 float reductions
+  are `// RIG-VERIFY` in `avscuda_conditional_rig.cl`). Remaining: resample
+  4 (shared-mem coeff resizer); host plumbings (`Copy.cu`, `memcpy_kernel`)
+  and the debug OSD are excluded. See `docs/AVSCUDA_PORT_SPEC.md`.
 
 ## 6. AviSynth integration (device glue)
 

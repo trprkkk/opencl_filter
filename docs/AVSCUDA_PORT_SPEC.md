@@ -12,7 +12,7 @@ resizer) — no KTGMC/KFM dependencies. Kernel prefix: `ka_`.
 | `filters/Filters.cu` | `kl_invert_plane`, `kl_invert_rgb` | ✔ batch-1 (same) |
 | `filters/Convert.cu` | 5 (`lower_dither`, `lower_no_dither`, `higher`, `from_float`, `to_float`) | ✔ batch-2 (10 scalar kernels, ALG-VERIFIED) |
 | `filters/ConditionalFunctions.cu` | 5 (`init_sum`/`sum`/`sad`/`init_hist`/`count_hist`) | ✔ batch-3 (15 kernels ALG-VERIFIED + 2 float // RIG-VERIFY) |
-| `filters/Resample.cu` (~2833 lines) | 4 (shared-mem coeff resamplers) | roadmap §4 |
+| `filters/Resample.cu` (~2833 lines) | 4 (`v_pointresize`, `v_planar`, `h_pointresize`, `h_planar`) | ✔ batch-4 (8 scalar kernels, ALG-VERIFIED) |
 
 Total: 18 device-kernel templates. Excluded by census: `common/Copy.cu` and
 `memcpy_kernel` (host-plumbing memcpys → host API, no port), `kl_draw_text`
@@ -86,6 +86,19 @@ reductions are faithful // RIG-VERIFY transcriptions in
 cross-block arrival order is undefined upstream too, so only a
 tolerance-based device comparison can verify them -- no mirror, no pin).
 
+Batch-4 (`avscuda_resample.cl`, 8 kernels) ports the FilteredResizeH/V device
+paths: row/unit select (`ka_resize_v_pointresize[_f32]`, packed-aware byte
+`ka_resize_h_pointresize_bytes` covering unit sizes 1/2/3/4/6/8) and the
+separable filters (`ka_resize_v_planar[_f32]`, `ka_resize_h_planar_u8/u16/f32`
+over element streams with a unit stride). The CUDA __shared__ coeff tile (v)
+and the transposed+tiled staging (h, make_h_coeff_for_cuda) are elided: the
+port reads the LOGICAL program coeff[out*filter_size+i] from global (the host
+passes the untransposed pixel_coefficient_float) — same values, no
+work-group-size or filter_size limits. Int pixels accumulate from 0.5f
+unfused, clamp [0,limit], truncate (NaN yields limit); float from 0.0f,
+unclamped. Host dispatch (filter_size == 1 -> pointresize) and limit =
+(1<<bits)-1 are pinned as contracts.
+
 **ALG-VERIFIED** via `python/run_avscuda_merge.py` (620 cases:
 `sim/avscuda_merge_ref.cpp` vs independent golden; dual-pitch, host-formula
 weights incl. band edges 0.4961/0.5039 and 0/1, crafted value edges, float
@@ -99,21 +112,28 @@ channel/uniform/random masks, non-mult-4 widths, RGB full+partial masks).
 - `src/opencl/avscuda/kernels/avscuda_convert.cl` — the 10 convert kernels.
 - `src/opencl/avscuda/kernels/avscuda_conditional.cl` — the 15 conditional
   kernels; `avscuda_conditional_rig.cl` — the 2 float // RIG-VERIFY kernels.
+- `src/opencl/avscuda/kernels/avscuda_resample.cl` — the 8 resizer kernels.
 - `sim/avscuda_merge_ref.cpp`, `sim/avscuda_filters_ref.cpp`,
   `sim/avscuda_convert_ref.cpp` — CPU mirrors (int-token protocol;
   float as bit-pattern ints).
 - `python/run_avscuda_merge.py` (620 cases), `python/run_avscuda_filters.py`
   (750), `python/run_avscuda_convert.py` (1320: all producible (shift,bits)
   pairs, NaN/Inf float edges) and `python/run_avscuda_conditional.py`
-  (1320: u32-wrap oversized frames, clamped content, NaN hist indices) —
-  goldens, wired into `make test`. `sim/avscuda_conditional_ref.cpp` is the
-  15-mode mirror (int-token protocol; u64 sums print as one decimal).
+  (1320: u32-wrap oversized frames, clamped content, NaN hist indices),
+  `python/run_avscuda_resample.py` (1230: synthetic programs, fs 1..64,
+  packed units, NaN taps incl. a non-canonical payload) — goldens, wired
+  into `make test`. `sim/avscuda_conditional_ref.cpp` is the 15-mode mirror
+  (int-token protocol; u64 sums print as one decimal);
+  `sim/avscuda_resample_ref.cpp` the 8-mode mirror (logical programs).
 
-## 4. Roadmap (remaining 4 templates)
+## 4. Roadmap — complete
 
-- **Resample (4)**: the ~2833-line resizer with shared-memory coefficient
-  staging. Largest batch; shared-mem → `__local` transcription with the
-  rig-bound layout proofs, like the KDeblock texture/sharpen work.
+All 18 device-kernel templates are ported (16 ALG-VERIFIED batches + the 2
+float Conditional reductions as // RIG-VERIFY). What remains is host-side:
+AviSynth device glue (frame upload/download, program upload incl. the
+untransposed resample programs), the rig proofs for the 2 RIG-VERIFY kernels
+(tolerance-based float comparison), and perf passes (shared-mem staging,
+vectorization) — none of which change verified values.
 
 ## 5. Excluded (proven by census caller greps @`68aef6e`)
 

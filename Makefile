@@ -41,6 +41,7 @@ test: ref lint
 	python3 python/run_avscuda_filters.py
 	python3 python/run_avscuda_convert.py
 	python3 python/run_avscuda_conditional.py
+	python3 python/run_avscuda_resample.py
 
 clean:
 	rm -rf build

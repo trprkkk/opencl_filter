@@ -246,6 +246,12 @@ Makefile                       # make test  (no OpenCL required)
   faithful `// RIG-VERIFY` transcriptions in `avscuda_conditional_rig.cl`
   (arrival order undefined upstream too; tolerance-based device comparison
   mandatory, not covered by `make test`).
+- `avscuda_resample.cl`: **AvsCUDA FilteredResizeH/V** — row/unit select
+  (`ka_resize_v_pointresize[_f32]`, `ka_resize_h_pointresize_bytes`) and
+  separable filters (`ka_resize_v_planar[_f32]`, `ka_resize_h_planar_u8/u16/
+  f32`; logical programs, shared-mem/transpose staging elided, unfused f32).
+  **ALG-VERIFIED** via `python/run_avscuda_resample.py` (1230 cases vs
+  `sim/avscuda_resample_ref.cpp`). AvsCUDA is now fully ported (18/18).
 
 ## How the port is validated (no GPU/OpenCL needed)
 

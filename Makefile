@@ -47,6 +47,7 @@ test: ref lint
 	python3 python/run_nnedi3_compute.py
 	python3 python/run_masktools_lut.py
 	python3 python/run_mv_calc_all_sad.py
+	python3 python/run_mv_prepare.py
 
 clean:
 	rm -rf build

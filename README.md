@@ -117,6 +117,11 @@ Makefile                       # make test  (no OpenCL required)
   MVKernel.cu, which also exposed two ABI bugs in the port (`vectors` is
   `short2`, not `int2`; `out` is a packed 12-byte `VECTOR`, not `int3`) —
   see `docs/BLOCKSEARCH_MODEL.md` §8a.
+  `kt_prepare_degrain` / `kt_prepare_compensate` are ported **provisionally**
+  in the quarantined `ktgmc_degrain_rig.cl` (`// RIG-VERIFY`): they produce
+  the flat per-block offset/weight arrays that the ALG-VERIFIED
+  `kt_degrain_patch` consumes, closing the `docs/MV_PORT_SPEC.md` §6.2 seam,
+  with their arithmetic pinned by `python/run_mv_prepare.py` (240 cases).
   **RIG-VERIFY** (device run pending): frame padding / mirror copy,
   `kt_most_freq_mv` (smallest-mode seed), and the block-search pure helpers.
   The remaining search / degrain-block /

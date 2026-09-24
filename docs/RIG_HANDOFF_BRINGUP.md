@@ -5,7 +5,8 @@ that can be proven without a GPU has been ported and proven. What is left
 needs a machine with an OpenCL device and (for cross-checking) a CUDA build
 of `rigaya/AviSynthCUDAFilters`.
 
-Two **package-level** handoffs already exist and are still authoritative for
+Three **quarantined provisional packages** exist (`*_rig.cl`), listed in
+§2.6. Two **package-level** handoffs already exist and are still authoritative for
 their own scope — do not duplicate them, execute them:
 
 - `docs/RIG_HANDOFF_KDEBLOCK.md` — KDeblock provisional kernels (2 sharpen
@@ -137,6 +138,29 @@ the required size needs a re-decomposition, which invalidates the
 bit-exactness argument for the reductions and must come back through the
 mirror+golden process.
 
+### 2.6 Quarantined provisional kernels (`*_rig.cl`) — 6 kernels
+
+Faithful transcriptions kept OUT of the verified files. None may be moved
+without the evidence named in each file's header.
+
+| File | Kernels | Why quarantined | Reachable terminal state |
+|---|---|---|---|
+| `avscuda_conditional_rig.cl` | 2 | float reduction order is device-defined | `// RIG-COMPARED` only |
+| `kfm_deblock_rig.cl` | `kf_sharpen`, `kf_show_sharpen_coeff` | CUDA texture-fetch precision | `// ALG-VERIFIED` |
+| `ktgmc_degrain_rig.cl` | `kt_prepare_degrain`, `kt_prepare_compensate` | host block-geometry model unsettled (`MV_PORT_SPEC` §6.1) | `// ALG-VERIFIED` |
+
+Four of the six have their *deterministic* arithmetic pinned in-sandbox by
+a mirror+golden pair (`run_kfm_deblock_aux.py` modes P/W, and
+`run_mv_prepare.py`), so they cannot drift while the device question stays
+open; the two Conditional kernels cannot be pinned even in principle.
+
+The `ktgmc_degrain_rig.cl` pair is the one that closes a documented seam:
+it emits exactly the flat per-block offset/weight arrays the ALG-VERIFIED
+`kt_degrain_patch` consumes, replacing upstream's struct of raw pointers.
+Two encodings need host cooperation — offset 0 + weight 0 for an unusable
+reference, and `-1` sentinels on scene change. `MV_PORT_SPEC` §6.3 explains
+both and why they are output-equivalent.
+
 ### 2.5 Two families are complete — they are the cheapest first targets
 
 masktools (5/5) and NNEDI3 (6/6) are fully ported and fully verified.
@@ -159,7 +183,13 @@ ports.
    elementwise, should follow quickly once the harness is proven.
 5. **The two existing package handoffs** — `RIG_HANDOFF_KDEBLOCK.md` then
    `RIG_HANDOFF_AVSCUDA_CONDITIONAL.md`.
-6. **KTGMC block search** — the only large port still outstanding; see §4.
+6. **KTGMC degrain/compensate** — validate the §2.6 prepare pair against
+   CUDA, then wire `kt_degrain_patch`/`kt_overlap_out` behind it. The
+   remaining `kl_degrain_2x3` / `kl_compensate_2x3` accumulate into the
+   global tmp with `+=` across thread blocks and are race-free only because
+   the host dispatches disjoint `(nPatternX, nPatternY, M)` passes — port
+   them only once you can reproduce that dispatch.
+7. **KTGMC block search** — the only large port still outstanding; see §4.
 
 ## 4. The one big piece still unported: `kl_search`
 

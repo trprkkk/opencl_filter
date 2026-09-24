@@ -194,8 +194,13 @@ reduction geometry. Concretely, the unported set splits into:
   `dev_reduce_result`, `load4pix(_Aligned)`, and `kl_prepare_search`'s consumer
   loop.
 - **Degrain / compensate block kernels** (need `DegrainBlockData`/`ArgData`
-  super-frame pointers + MV arrays): `kl_prepare_degrain`, `kl_degrain_2x3`,
-  `kl_prepare_compensate`, `kl_compensate_2x3`.
+  super-frame pointers + MV arrays): `kl_prepare_degrain` and
+  `kl_prepare_compensate` are now ported **provisionally** as
+  `kt_prepare_degrain` / `kt_prepare_compensate` in the quarantined
+  `src/opencl/ktgmc/kernels/ktgmc_degrain_rig.cl` (`// RIG-VERIFY`), with
+  their arithmetic pinned by `python/run_mv_prepare.py` (240 cases, 8
+  mutants) — see §6.3. `kl_degrain_2x3` and `kl_compensate_2x3` remain
+  unported on purpose (§6.1).
 
 ### 6.1 Why the degrain / compensate per-pixel kernels stay rig-bound
 
@@ -237,6 +242,41 @@ supplies the per-block ref-plane base offsets and windows (see §6.2).
   `kl_box5_v_and_border`, `kl_binomial_temporal_soften_1/2` — several use packed
   `vpixel_t`/`__vabsdiff4` or float `atomicAdd` reductions whose output ordering
   is not bit-deterministic, so they are ported scalar / as flags only.
+
+### 6.3 The two prepare kernels, ported provisionally
+
+`ktgmc_degrain_rig.cl` transcribes `kl_prepare_degrain` (:1884) and
+`kl_prepare_compensate` (:2137). They are quarantined rather than graduated
+because §6.1's block-geometry question is a property of the CALL SITE, not
+of the kernel: the transcription follows the CUDA model
+(`blkStep = nBlkSize/2`, origin `nPad + blk*blkStep`) and only a rig can
+confirm that is what the host means.
+
+What the port changes, deliberately, is the output encoding. Upstream fills
+a struct of raw POINTERS; OpenCL cannot store those portably and the
+ALG-VERIFIED consumer `kt_degrain_patch` does not want them — it takes flat
+per-block element offsets and weight arrays. These kernels emit exactly the
+arrays that consumer declares, which is what §6.2 below calls the remaining
+seam. Two encodings need host cooperation, both provably output-equivalent:
+
+- **Unusable reference**: upstream parks the pointer on `arg.pSrc` (another
+  plane, another pitch) with weight 0, noting the values are never used.
+  The port emits offset 0 with weight 0 — different pixels, identical
+  output, since `kt_degrain_patch` multiplies by that zero.
+- **Scene change** (compensate): upstream writes `nullptr` for `winOver`
+  and `pRef`; the port writes the sentinel `-1` to `win_slot`/`ref_base`
+  and `ref_sel`, which the host must treat as "skip", exactly as a null
+  check would.
+
+Two upstream details the pin protects and a rewrite would lose:
+
+- The 9-window slot divides by `(nBlkX-2)`/`(nBlkY-2)`, so a 2-block-wide
+  or 2-block-tall grid divides by zero **upstream too**. The port does not
+  paper over it; the host must not call with `nBlkX == 2` or `nBlkY == 2`.
+- Compensate scales the MV as `(vec.x * time256 / 256) >> SHIFT`: a C
+  division that truncates toward zero followed by an arithmetic shift that
+  floors. For negative MVs those are different maps, and a mutant that
+  "simplifies" the division into a shift is caught by the runner.
 
 ### 6.2 The one seam between verified kernels and the rig
 

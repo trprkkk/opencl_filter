@@ -233,6 +233,9 @@ To get a working deinterlacer you must port the mvtools-equivalent layers:
   FilteredResizeH/V (8 kernels in `avscuda_resample.cl`, 1230 cases).
   AvsCUDA is now fully ported (18/18 templates); host plumbings
   (`Copy.cu`, `memcpy_kernel`) and the debug OSD were excluded by census.
+  Rig host for the 2 float reductions: `src/host/run_avscuda_rig.cpp`;
+  device-run handoff: `docs/RIG_HANDOFF_AVSCUDA_CONDITIONAL.md`; static
+  perf pass over all families: `docs/PERF_NOTES.md`.
   See `docs/AVSCUDA_PORT_SPEC.md`.
 
 ## 6. AviSynth integration (device glue)

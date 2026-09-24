@@ -19,8 +19,9 @@ graduation path to `// ALG-VERIFIED`** here. The terminal state is
   `68aef6e9b8a63d0dceb8e7f68b52b27431aa361f9` (§2).
 - **Your job:** build a CUDA harness that runs the two
   `kl_sum_of_pixels<float4,float,float>` / `kl_sad<float4,float,float>`
-  instantiations and an OpenCL host that runs the two transcriptions (§5);
-  prove **bit-exact agreement on exact-arithmetic inputs** (Phase A) and
+  instantiations (the OpenCL host is already provided as
+  `src/host/run_avscuda_rig.cpp` — build it via cmake, §5); prove
+  **bit-exact agreement on exact-arithmetic inputs** (Phase A) and
   **in-band agreement on general inputs** (Phase B, tolerance-based);
   then mark the kernels `// RIG-COMPARED` and fill in the results appendix
   (§8). No mirror, no golden, no `make test` wiring — §3 explains why that
@@ -224,8 +225,11 @@ as upstream.
 ### 4.4 Launch contract (your harness must honour it — all load-bearing)
 
 1. **Local size is exactly (16,16).** The kernel hard-codes
-   `tid = get_local_id(0) + get_local_id(1)*16` and `sbuf[256]`; any other
-   local size silently computes garbage.
+   `tid = get_local_id(0) + get_local_id(1)*16` and `sbuf[256]`; a wrong
+   local size would silently compute garbage, so both kernels additionally
+   carry `reqd_work_group_size(16,16,1)` — a non-(16,16) local size fails
+   at enqueue with `CL_INVALID_WORK_GROUP_SIZE` instead. The harness
+   passes (16,16) explicitly regardless.
 2. **Global size is 16-rounded-up**: `(round16(width), round16(height))`.
    Out-of-range items contribute `0.0f` through the tree — exactly like
    CUDA's full edge blocks.
@@ -262,8 +266,9 @@ as upstream.
 
 ## 5. The verification protocol
 
-You need two harnesses (names advisory, keep them out of `make test` —
-suggested scratch dir `tools/rig_conditional/`, or your rig's equivalent):
+You need two harnesses — the OpenCL one is provided, the CUDA one you write
+(keep both out of `make test`; suggested scratch dir for your CUDA side:
+`tools/rig_conditional/`, or your rig's equivalent):
 
 - **CUDA harness** (`cond_cuda.cu`, built with nvcc): includes the upstream
   headers (`-I…/common` for `ReduceKernel.cuh`/`VectorFunctions.cuh`),
@@ -273,10 +278,15 @@ suggested scratch dir `tools/rig_conditional/`, or your rig's equivalent):
   `cudaMalloc`+`cudaMemset`). Note: the `__CUDA_ARCH__ >= 800`
   `__reduce_add_sync` fast path applies to the `int` specialization only —
   float always takes the shuffle cascade (§2.1), on every arch.
-- **OpenCL harness** (`cond_cl.cpp`, following `docs/HOST_CONTRACT.md` §1–§3
-  with the rig file as a third program): builds
-  `avscuda_conditional_rig.cl` once, launches per §4.4, reads the counter
-  back after `clFinish`.
+- **OpenCL harness** — provided as `src/host/run_avscuda_rig.cpp` (build:
+  `cmake -S . -B build && cmake --build build --target avscuda_rig_host`;
+  compile-checked only, so run the A1 smoke test in its header comment
+  first): builds `avscuda_conditional_rig.cl` once, launches per §4.4,
+  reads the counter back after `clFinish`, and prints counter bits + the
+  host f64 reference per run. Its `fill_plane()` is the **canonical
+  input-fill definition** — transcribe those float expressions verbatim
+  into the CUDA twin so both sides consume bit-identical inputs (same
+  shapes, fills, seeds).
 
 Both harnesses take the same (shape, distribution, seed) configs and print the
 raw counter bits (`%08x` + `%f`) per run. Drive them from a script that loops
@@ -440,5 +450,8 @@ install GPU stacks here; do not close the handoff without the runs in §5.
 *Handoff prepared from upstream `68aef6e`; transcriptions in
 `src/opencl/avscuda/kernels/avscuda_conditional_rig.cl`. Questions about
 intent should be answerable from the per-kernel comments in the rig file +
+the CUDA twins cited above; if a twin and this doc ever disagree, the twin
+wins and this doc must be fixed.*
+from the per-kernel comments in the rig file +
 the CUDA twins cited above; if a twin and this doc ever disagree, the twin
 wins and this doc must be fixed.*

@@ -88,6 +88,9 @@ tolerance-based device comparison can verify them -- no mirror, no pin).
 Verification handoff spec for another agent:
 `docs/RIG_HANDOFF_AVSCUDA_CONDITIONAL.md` (device-run protocol, exact anchors
 + in-band criteria; terminal state `// RIG-COMPARED`, never ALG-VERIFIED).
+OpenCL-side host harness `src/host/run_avscuda_rig.cpp` implements the §4.4
+launch contract + canonical fills (handoff §5); the kernels now additionally
+carry `reqd_work_group_size(16,16,1)` so a wrong local size fails at enqueue.
 
 Batch-4 (`avscuda_resample.cl`, 8 kernels) ports the FilteredResizeH/V device
 paths: row/unit select (`ka_resize_v_pointresize[_f32]`, packed-aware byte

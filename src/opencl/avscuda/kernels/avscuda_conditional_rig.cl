@@ -16,7 +16,10 @@
  * Transcription notes (two substitutions, both documented):
  * 1. The CUDA warp-shuffle tree becomes a portable __local sequential-
  *    addressing tree over 256 work-items (required work-group size 16x16,
- *    matching SUM_TH_W/H; launch with exactly that local size).  Halving
+ *    matching SUM_TH_W/H; launch with exactly that local size — enforced by
+ *    reqd_work_group_size(16,16,1) on both kernels: any other local size
+ *    fails at enqueue with CL_INVALID_WORK_GROUP_SIZE instead of silently
+ *    computing garbage).  Halving
  *    order: stride 128, 64, ..., 1; within a step, item tid adds item
  *    tid+stride (unfused float adds).  Any intra-block order is as (in)valid
  *    as the shuffle order given the global nondeterminism.
@@ -47,7 +50,7 @@ inline void ka_atomic_add_f32(__global float* addr, float val)
 /* ---------------------------------------------------------------------------
  * ka_sum_pixels_f32 — // RIG-VERIFY (see file header).
  * -------------------------------------------------------------------------*/
-kernel void ka_sum_pixels_f32(
+kernel __attribute__((reqd_work_group_size(16, 16, 1))) void ka_sum_pixels_f32(
     __global const float* __restrict src, int width, int height, int pitch,
     int maxv, __global float* __restrict sum)
 {
@@ -76,7 +79,7 @@ kernel void ka_sum_pixels_f32(
 /* ---------------------------------------------------------------------------
  * ka_sad_f32 — // RIG-VERIFY (see file header).
  * -------------------------------------------------------------------------*/
-kernel void ka_sad_f32(
+kernel __attribute__((reqd_work_group_size(16, 16, 1))) void ka_sad_f32(
     __global const float* __restrict src0,
     __global const float* __restrict src1,
     int width, int height, int pitch,

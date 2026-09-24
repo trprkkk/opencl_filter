@@ -20,6 +20,13 @@ if(OpenCL_FOUND)
            COMMAND ktgmc_opencl_host
                    ${CMAKE_SOURCE_DIR}/src/opencl/ktgmc/kernels/ktgmc_simple.cl
                    ${CMAKE_SOURCE_DIR}/src/opencl/ktgmc/kernels/ktgmc_motion.cl)
+  # AvsCUDA Conditional rig harness (docs/RIG_HANDOFF_AVSCUDA_CONDITIONAL.md
+  # §5): dispatches ka_sum_pixels_f32 / ka_sad_f32 per the §4.4 launch
+  # contract and prints counter bits + f64 reference. Device-required, so no
+  # add_test here (the handoff's Phase A/B driver invokes it explicitly).
+  add_executable(avscuda_rig_host src/host/run_avscuda_rig.cpp)
+  target_link_libraries(avscuda_rig_host PRIVATE OpenCL::OpenCL)
+  set_target_properties(avscuda_rig_host PROPERTIES CXX_STANDARD 17)
 endif()
 
 enable_testing()

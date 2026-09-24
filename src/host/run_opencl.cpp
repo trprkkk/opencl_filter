@@ -1,7 +1,8 @@
 // OpenCL bring-up smoke test for the KTGMC kernel ports.
 //
-// STATUS: UNVALIDATED SCAFFOLDING. This sandbox has no OpenCL ICD, so this file
-// has NOT been compiled or run. Its job on a rig is only the first bring-up
+// STATUS: COMPILE-CHECKED ONLY (-fsyntax-only against Khronos OpenCL-Headers;
+// no OpenCL ICD in this sandbox, so never linked or run). Its job on a rig is
+// only the first bring-up
 // step: pick a device, build both kernel sources at both -DPX instantiations
 // (uchar and ushort), and report whether every program compiles. Per-kernel
 // numeric dispatch is specified in docs/HOST_CONTRACT.md and should be added
@@ -10,6 +11,8 @@
 // Build (from build dir): cmake .. && make ktgmc_opencl_host
 // Requires ocl-icd-opencl-dev (headers + loader) + a device ICD (vendor or
 // pocl-opencl-icd). Exit code 0 == all programs built.
+// 1.2 API only; the 120 target keeps queue creation un-deprecated.
+#define CL_TARGET_OPENCL_VERSION 120
 #include <CL/cl.h>
 
 #include <cstdio>

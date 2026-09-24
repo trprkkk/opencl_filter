@@ -102,7 +102,10 @@ samples. The exact per-kernel argument lists and arithmetic are validated by the
 CPU mirror `sim/ktgmc_cpu_ref.cpp` and the `build/val/*` vectors produced by
 `python/run_validation.py`; reuse those input planes and expected outputs for the
 rig diff (identical inputs → identical outputs, including the 32-bit SAD
-overflow behaviour of `kt_plane_sad`).
+overflow behaviour of `kt_plane_sad`). KGaussResize needs no extra kernels:
+it launches `kt_resample_v/h` at fir 8/9 with gaussian programs — reuse the
+`gres_*` planes and `gprog_*` tables (offsets + float coef bits) from
+`build/val` as the rig vectors.
 
 ## 4. Recommended rig self-test
 

@@ -94,6 +94,46 @@ ResamplingProgram build_resampling_program(int source_size,double crop_start,dou
     return P;
 }
 
+struct Gaussian {
+    double param;
+    Gaussian(double p){ param=clamp(p,0.1,100.0); } /* upstream ctor clamps */
+    double support(){return 4.0;}
+    /* Upstream GaussianFilter::f verbatim. Bit-identity of pow() with the
+     * Python golden holds on the same host libm (both call C pow); cross-libm
+     * 1-ulp variance is out of scope — these coefs are host-computed and
+     * float-rounded for the device (see write_gprog). */
+    double f(double value){ double p=param*0.1; return pow(2.0,-p*value*value); }
+};
+
+/* KGaussResize program builder: the same upstream GetResamplingProgram
+ * skeleton as build_resampling_program, with the GaussianFilter f/support.
+ * Kept as a full transcription (not a template) so the Mitchell path stays
+ * byte-stable. Upstream dispatches fir 8/9 only and throws otherwise; the
+ * runner asserts the fir of every program built here. */
+ResamplingProgram build_gaussian_program(int source_size,double crop_start,double crop_size,
+                                         int target_size,double p){
+    Gaussian gs(p);
+    double filter_scale=double(target_size)/crop_size, filter_step=min(filter_scale,1.0);
+    double filter_support=gs.support()/filter_step; int fir=int(ceil(filter_support*2));
+    ResamplingProgram P; P.filter_size=fir; P.target_size=target_size;
+    P.offset.assign(target_size,0); P.coef.assign((size_t)target_size*fir,0.0);
+    double pos,pos_step=crop_size/target_size;
+    pos=(fir==1)?crop_start:crop_start+((crop_size-target_size)/(target_size*2));
+    for(int i=0;i<target_size;++i){
+        int end_pos=int(pos+filter_support); if(end_pos>source_size-1)end_pos=source_size-1;
+        int start_pos=end_pos-fir+1; if(start_pos<0)start_pos=0;
+        P.offset[i]=start_pos;
+        double total=0.0, ok_pos=clamp(pos,0.0,double(source_size-1));
+        for(int j=0;j<fir;++j)total+=gs.f((start_pos+j-ok_pos)*filter_step);
+        if(total==0.0)total=1.0;
+        double value=0.0;
+        for(int k=0;k<fir;++k){double nv=value+gs.f((start_pos+k-ok_pos)*filter_step)/total;
+            P.coef[i*fir+k]=nv-value; value=nv;}
+        pos+=pos_step;
+    }
+    return P;
+}
+
 /* ---------------- per-pixel kernels (scalar, double-accumulate) ------- */
 template<typename PX>
 void kernel_resample_v(const Plane<PX>& src,Plane<PX>& dst,int outH,const ResamplingProgram& prog){
@@ -274,13 +314,30 @@ long long kernel_plane_sad(const Plane<PX>& a,const Plane<PX>& b){
 static void kernel_init_sad(float* sad,int N){
     for(int i=0;i<N;++i)sad[i]=0.0f;}
 
+/* Write one gaussian program's device-bound tables: int offsets, double coefs
+ * (%.17g round-trips), and the float coefs the device actually consumes, as
+ * %08x bits. Upstream stores pixel_coefficient_float[i] = float(new_value);
+ * the (float) cast here is the same correctly-rounded conversion. */
+static void write_gprog(const string& outDir,const string& tag,const ResamplingProgram& P){
+    FILE* fo=fopen((outDir+"/gprog_"+tag+"_offset.txt").c_str(),"w");
+    for(int i:P.offset)fprintf(fo,"%d\n",i); fclose(fo);
+    FILE* fc=fopen((outDir+"/gprog_"+tag+"_coef.txt").c_str(),"w");
+    for(double c:P.coef)fprintf(fc,"%.17g\n",c); fclose(fc);
+    FILE* fx=fopen((outDir+"/gprog_"+tag+"_coef_f32.txt").c_str(),"w");
+    for(double c:P.coef){ float f=(float)c; uint32_t u; memcpy(&u,&f,4); fprintf(fx,"%08x\n",u); }
+    fclose(fx);
+}
+
 /* ---------------- driver ---------------- */
 template<typename PX>
-bool run_all(const string& inDir,const string& outDir,const ResamplingProgram& progV,const ResamplingProgram& progH,int FIELD_H){
-    Plane<PX> a,b,c,ref,n2,n1,p1,p2,field;
+bool run_all(const string& inDir,const string& outDir,const ResamplingProgram& progV,const ResamplingProgram& progH,int FIELD_H,
+              const ResamplingProgram& gV9,const ResamplingProgram& gH9,
+              const ResamplingProgram& gV8,const ResamplingProgram& gH8,int GH_H){
+    Plane<PX> a,b,c,ref,n2,n1,p1,p2,field,gsrc;
     if(!readPlane(inDir,"a",a)||!readPlane(inDir,"b",b)||!readPlane(inDir,"c",c)||
        !readPlane(inDir,"ref",ref)||!readPlane(inDir,"n2",n2)||!readPlane(inDir,"n1",n1)||
-       !readPlane(inDir,"p1",p1)||!readPlane(inDir,"p2",p2)||!readPlane(inDir,"field",field)) return false;
+       !readPlane(inDir,"p1",p1)||!readPlane(inDir,"p2",p2)||!readPlane(inDir,"field",field)||
+       !readPlane(inDir,"gsrc",gsrc)) return false;
     int W=a.w,H=a.h,pitch=a.pitch;
     auto out=[&](int w,int h){Plane<PX> o;o.w=w;o.h=h;o.pitch=pitch;o.data.assign((size_t)pitch*h,0);return o;};
     const int bits = (sizeof(PX)==1)?8:16;
@@ -297,6 +354,10 @@ bool run_all(const string& inDir,const string& outDir,const ResamplingProgram& p
     {auto o=out(W,H);kernel_merge(a,b,o,(int)(0.5f*32767));writePlane(outDir,"merge",o);}
     {auto o=out(W,FIELD_H*2);kernel_resample_v(field,o,FIELD_H*2,progV);writePlane(outDir,"resample_v",o);}
     {auto o=out(W,H);kernel_resample_h(a,o,progH);writePlane(outDir,"resample_h",o);}
+    {auto o=out(W,GH_H);kernel_resample_v(gsrc,o,GH_H,gV9);writePlane(outDir,"gres_v9",o);}
+    {auto o=out(W,GH_H);kernel_resample_h(gsrc,o,gH9);writePlane(outDir,"gres_h9",o);}
+    {auto o=out(W,GH_H);kernel_resample_v(gsrc,o,GH_H,gV8);writePlane(outDir,"gres_v8",o);}
+    {auto o=out(W,GH_H);kernel_resample_h(gsrc,o,gH8);writePlane(outDir,"gres_h8",o);}
     {auto o=out(W,H);kernel_box5(a,o,1);writePlane(outDir,"box5min",o);}
     {auto o=out(W,H);kernel_box5(a,o,0);writePlane(outDir,"box5max",o);}
     {auto o=out(W,H);kernel_logic(a,b,o,1);writePlane(outDir,"logicmin",o);}
@@ -332,15 +393,30 @@ int main(int argc,char** argv){
     string inDir=argv[1],outDir=argv[2]; int bits=atoi(argv[3]);
     // KTGMC_Bob vertical: 5-row field -> 10 rows, Mitchell b=0,c=0.5 (Catmull-Rom)
     ResamplingProgram progV=build_resampling_program(5,0.25,5,10,0.0,0.5);
-    // horizontal (identity-size, used by KGaussResize-style path)
+    // horizontal identity-size Mitchell
     ResamplingProgram progH=build_resampling_program(16,0,16,16,0.0,0.5);
+    // KGaussResize: same-size gaussian, crop = size + 0.0001 (upstream), p = 30 default
+    const int GH_H=12;
+    ResamplingProgram gV9=build_gaussian_program(GH_H,0,GH_H+0.0001,GH_H,30.0);
+    ResamplingProgram gH9=build_gaussian_program(16,0,16.0001,16,30.0);
+    ResamplingProgram gV8=build_gaussian_program(GH_H,0,GH_H,GH_H,30.0);
+    ResamplingProgram gH8=build_gaussian_program(16,0,16,16,30.0);
+    // p edges + clamp probes (tables only; runner asserts -5 == 0.1, 250 == 100)
+    ResamplingProgram gV9_p01=build_gaussian_program(GH_H,0,GH_H+0.0001,GH_H,0.1);
+    ResamplingProgram gV9_p100=build_gaussian_program(GH_H,0,GH_H+0.0001,GH_H,100.0);
+    ResamplingProgram gV9_neg5=build_gaussian_program(GH_H,0,GH_H+0.0001,GH_H,-5.0);
+    ResamplingProgram gV9_p250=build_gaussian_program(GH_H,0,GH_H+0.0001,GH_H,250.0);
     if(bits==8){
-        if(!run_all<uint8_t>(inDir,outDir,progV,progH,5))return 1;
+        if(!run_all<uint8_t>(inDir,outDir,progV,progH,5,gV9,gH9,gV8,gH8,GH_H))return 1;
         {FILE* f=fopen((outDir+"/prog_offset.txt").c_str(),"w");for(int i:progV.offset)fprintf(f,"%d\n",i);fclose(f);
          FILE* g=fopen((outDir+"/prog_coef.txt").c_str(),"w");for(double c:progV.coef)fprintf(g,"%.17g\n",c);fclose(g);}
+        write_gprog(outDir,"v9",gV9); write_gprog(outDir,"h9",gH9);
+        write_gprog(outDir,"v8",gV8); write_gprog(outDir,"h8",gH8);
+        write_gprog(outDir,"v9_p01",gV9_p01); write_gprog(outDir,"v9_p100",gV9_p100);
+        write_gprog(outDir,"v9_neg5",gV9_neg5); write_gprog(outDir,"v9_p250",gV9_p250);
         fprintf(stderr,"bitdepth 8 done\n");
     } else {
-        if(!run_all<uint16_t>(inDir,outDir,progV,progH,5))return 1;
+        if(!run_all<uint16_t>(inDir,outDir,progV,progH,5,gV9,gH9,gV8,gH8,GH_H))return 1;
         fprintf(stderr,"bitdepth 16 done\n");
     }
     return 0;

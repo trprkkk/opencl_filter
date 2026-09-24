@@ -131,8 +131,16 @@ SAD) maps to the scalar `kt_plane_sad` plus a host-side threshold compare,
 and `kl_init_sad` is ported 1:1 as `kt_init_sad` (ALG-VERIFIED) — no further
 kernels needed here.
 
-`GaussianFilter` (KGaussResize) is already implemented as a second
-`ResamplingFunction` in the reference; add its `.cl` variants next.
+`GaussianFilter` (KGaussResize) needed no new `.cl`: upstream launches the
+same `kl_resample_h/v` templates at `filter_size` 8/9, which `kt_resample_h/v`
+already cover with a runtime `filter_size`. What was added is the gaussian
+program builder (`build_gaussian_program` in `sim/ktgmc_cpu_ref.cpp` +
+`python/run_validation.py`: `pow(2,-p·x²)`, support 4.0, `p` clamped to
+[0.1,100], crop `+0.0001` ⇒ fir 9 / exact crop ⇒ fir 8) with fir-8/9
+resample planes, int-offset + double-coef + float-coef-bit tables, and
+clamp-probe cross-checks — all compared bit-exact by `run_validation.py`
+(same-machine libm `pow`; the `.cl` float-accumulation path stays
+device-side like the existing Mitchell resample).
 
 ## 4. Motion-compensation stages (the big remaining work)
 

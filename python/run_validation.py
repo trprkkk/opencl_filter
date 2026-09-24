@@ -24,7 +24,8 @@ os.makedirs(WORK, exist_ok=True)
 W, PITCH = 16, 20
 A_H = B_H = REF_H = 10
 FIELD_H = 5
-NBR = ("a", "b", "c", "ref", "n2", "n1", "p1", "p2", "field")
+GH_H = 12  # gaussian plane height (non-square vs W=16: keeps V/H programs distinct)
+NBR = ("a", "b", "c", "ref", "n2", "n1", "p1", "p2", "field", "gsrc")
 
 # ---------------------------------------------------------------- generation
 def gen_plane(rng, h, maxval, blocky=True):
@@ -53,12 +54,13 @@ def make_inputs(bits):
     planes["p1"]    = gen_plane(rng, A_H,     maxval)
     planes["p2"]    = gen_plane(rng, A_H,     maxval)
     planes["field"] = gen_plane(rng, FIELD_H, maxval)
+    planes["gsrc"]  = gen_plane(rng, GH_H,    maxval)
     fmt = "B" if bits == 8 else "H"
     for name in NBR:
         with open(os.path.join(d, name + ".raw"), "wb") as f:
             f.write(struct.pack(fmt * len(planes[name]), *planes[name]))
     h = {"a": A_H, "b": B_H, "c": REF_H, "ref": REF_H, "n2": A_H,
-         "n1": A_H, "p1": A_H, "p2": A_H, "field": FIELD_H}
+         "n1": A_H, "p1": A_H, "p2": A_H, "field": FIELD_H, "gsrc": GH_H}
     with open(os.path.join(d, "plane.info"), "w") as f:
         for name in NBR:
             f.write(f"{name} {W} {h[name]} {PITCH}\n")
@@ -94,6 +96,41 @@ def build_resampling_program(source_size, crop_start, crop_size, target_size, b,
         row = []
         for k in range(fir):
             nv = value + mitf((start_pos + k - ok_pos) * filter_step, b, c) / total
+            row.append(nv - value); value = nv
+        coef.append(row)
+        pos += pos_step
+    return fir, off, coef
+
+def build_gaussian_program(source_size, crop_start, crop_size, target_size, p):
+    # NOTE: math.pow delegates to the C library pow (the same call the C++
+    # mirror makes) — bit-identical on the same host libm. ** is avoided so
+    # no interpreter fast path can interpose. Same cross-libm caveat as the
+    # mirror applies (host-computed, float-rounded coefs).
+    param = clamp(p, 0.1, 100.0)
+    def gf(x):
+        pp = param * 0.1
+        return math.pow(2.0, -pp * x * x)
+    support = 4.0
+    filter_scale = target_size / crop_size
+    filter_step = min(filter_scale, 1.0)
+    filter_support = support / filter_step
+    fir = int(math.ceil(filter_support * 2))
+    off, coef = [], []
+    pos_step = crop_size / target_size
+    pos = crop_start if fir == 1 else crop_start + ((crop_size - target_size) / (target_size * 2))
+    for i in range(target_size):
+        end_pos = int(pos + filter_support)
+        if end_pos > source_size - 1: end_pos = source_size - 1
+        start_pos = end_pos - fir + 1
+        if start_pos < 0: start_pos = 0
+        off.append(start_pos)
+        ok_pos = clamp(pos, 0.0, float(source_size - 1))
+        total = sum(gf((start_pos + j - ok_pos) * filter_step) for j in range(fir))
+        if total == 0.0: total = 1.0
+        value = 0.0
+        row = []
+        for k in range(fir):
+            nv = value + gf((start_pos + k - ok_pos) * filter_step) / total
             row.append(nv - value); value = nv
         coef.append(row)
         pos += pos_step
@@ -400,6 +437,7 @@ def run_bits(bits):
     a=ld("a",A_H); b=ld("b",A_H); c=ld("c",REF_H); ref=ld("ref",REF_H)
     n2=ld("n2",A_H); n1=ld("n1",A_H); p1=ld("p1",A_H); p2=ld("p2",A_H)
     field=ld("field",FIELD_H)
+    gsrc=ld("gsrc",GH_H)
     RANGE=1<<(bits-1)
     out_h={}      # name -> output height
     _gold={}
@@ -420,6 +458,22 @@ def run_bits(bits):
     setg("resample_v",10,kernel_resample_v(field,W,fir,off,coef,maxval,FIELD_H,10))
     firh,offh,coefh=build_resampling_program(16,0,16,16,0.0,0.5)
     setg("resample_h",A_H,kernel_resample_h(a,W,A_H,firh,offh,coefh,maxval))
+    # KGaussResize gaussian programs (upstream: same-size, crop + 0.0001, p = 30;
+    # fir 8/9 dispatch asserted with the table compares below).
+    gV9=build_gaussian_program(GH_H,0,GH_H+0.0001,GH_H,30.0)
+    gH9=build_gaussian_program(W,0,W+0.0001,W,30.0)
+    gV8=build_gaussian_program(GH_H,0,GH_H,GH_H,30.0)
+    gH8=build_gaussian_program(W,0,W,W,30.0)
+    gV9_p01=build_gaussian_program(GH_H,0,GH_H+0.0001,GH_H,0.1)
+    gV9_p100=build_gaussian_program(GH_H,0,GH_H+0.0001,GH_H,100.0)
+    gV9_neg5=build_gaussian_program(GH_H,0,GH_H+0.0001,GH_H,-5.0)
+    gV9_p250=build_gaussian_program(GH_H,0,GH_H+0.0001,GH_H,250.0)
+    gprogs={"v9":gV9,"h9":gH9,"v8":gV8,"h8":gH8,"v9_p01":gV9_p01,
+            "v9_p100":gV9_p100,"v9_neg5":gV9_neg5,"v9_p250":gV9_p250}
+    setg("gres_v9",GH_H,kernel_resample_v(gsrc,W,gV9[0],gV9[1],gV9[2],maxval,GH_H,GH_H))
+    setg("gres_h9",GH_H,kernel_resample_h(gsrc,W,GH_H,gH9[0],gH9[1],gH9[2],maxval))
+    setg("gres_v8",GH_H,kernel_resample_v(gsrc,W,gV8[0],gV8[1],gV8[2],maxval,GH_H,GH_H))
+    setg("gres_h8",GH_H,kernel_resample_h(gsrc,W,GH_H,gH8[0],gH8[1],gH8[2],maxval))
     setg("box5min",A_H,kernel_box5(a,W,A_H,1,maxval))
     setg("box5max",A_H,kernel_box5(a,W,A_H,0,maxval))
     setg("logicmin",A_H,kernel_logic(a,b,W,A_H,1))
@@ -461,6 +515,24 @@ def run_bits(bits):
         if coff!=off: ok=False; print("  MISMATCH prog_offset")
         cf2=[cf[y*fir+i] for y in range(10) for i in range(fir)]
         if cf2!=[c for row in coef for c in row]: ok=False; print("  MISMATCH prog_coef")
+        # KGaussResize gaussian program tables (+ fir dispatch + clamp probes)
+        for tag,(gfir,goff,gcoef) in gprogs.items():
+            want=8 if tag in ("v8","h8") else 9
+            if gfir!=want: ok=False; print(f"  MISMATCH gprog_{tag}: fir {gfir} != {want}")
+            roff=[int(l) for l in open(os.path.join(out_dir,f"gprog_{tag}_offset.txt"))]
+            if roff!=goff: ok=False; print(f"  MISMATCH gprog_{tag}_offset")
+            rcf=[float(l) for l in open(os.path.join(out_dir,f"gprog_{tag}_coef.txt"))]
+            flat=[c for row in gcoef for c in row]
+            if rcf!=flat: ok=False; print(f"  MISMATCH gprog_{tag}_coef")
+            rf32=[l.strip() for l in open(os.path.join(out_dir,f"gprog_{tag}_coef_f32.txt"))]
+            gf32=[struct.pack(">f",c).hex() for c in flat]  # BE bytes == %08x word
+            if rf32!=gf32: ok=False; print(f"  MISMATCH gprog_{tag}_coef_f32")
+        # clamp probes: out-of-range p must reproduce the clamped edge tables
+        for a,b in (("v9_neg5","v9_p01"),("v9_p250","v9_p100")):
+            for suf in ("offset.txt","coef.txt","coef_f32.txt"):
+                la=open(os.path.join(out_dir,f"gprog_{a}_{suf}")).read()
+                lb=open(os.path.join(out_dir,f"gprog_{b}_{suf}")).read()
+                if la!=lb: ok=False; print(f"  MISMATCH gprog clamp {a} != {b} ({suf})")
     print(f"[bitdepth {bits}] {'PASS' if ok else 'FAIL'}")
     return ok
 

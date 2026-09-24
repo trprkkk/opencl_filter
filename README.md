@@ -90,7 +90,9 @@ Makefile                       # make test  (no OpenCL required)
 ## Port status
 
 - `ktgmc_simple.cl`: 25 per-plane KTGMC kernels — **bit-for-bit validated**
-  (8/16-bit) via CPU + Python references (`make test` PASS).
+  (8/16-bit) via CPU + Python references (`make test` PASS). KGaussResize
+  needs no new kernels (same `kt_resample_h/v` at fir 8/9); its gaussian
+  program builder + fir-8/9 planes/tables are covered by `run_validation.py`.
 - `ktgmc_motion.cl`: motion / super-sampling kernels. **ALG-VERIFIED**: the
   degrain weight helpers (`kt_degrain_weight`, `kt_norm_weights`), MV-aux
   kernels (`kt_write_default_mv`, `kt_scene_change`/`_x2`, `kt_short_to_byte`,

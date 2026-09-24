@@ -542,10 +542,10 @@ layouts, the 1/3-fold constant, unwritten flag borders).
   (merge accumulator-layout reconciliation + the sharpen-pair texture-gap
   device comparison — see above and the handoff doc). With `kf_sharpen` /
   `kf_show_sharpen_coeff` transcribed, all 11 Deblock.cu device kernels now
-  exist as OpenCL. Upgrade path: the eight `kfm_deblock_rig.cl` kernels are
-  packaged for handoff in `docs/RIG_HANDOFF_KDEBLOCK.md` — six are future
-  ALG-VERIFY candidates under the mirror+golden method, while the sharpen
-  pair additionally mandates a device run.
+  exist as OpenCL. Of the eight `kfm_deblock_rig.cl` kernels packaged for
+  handoff in `docs/RIG_HANDOFF_KDEBLOCK.md`, six have since graduated to
+  `// ALG-VERIFIED` in `kfm_deblock.cl`; only the sharpen pair remains
+  `// RIG-VERIFY` (pinned P/W behaviour — still mandates a device run).
 - Remaining KFM families: the DecombeUCF.cu host pipelines (KDecombUCF* —
   heavy multi-clip sequencing; all 8 device kernels are done: KNoiseClip +
   the 7 reductions in kfm_decombeucf.cl). Deblock QPClip is a pure

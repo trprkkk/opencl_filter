@@ -264,6 +264,11 @@ Makefile                       # make test  (no OpenCL required)
   f32`; logical programs, shared-mem/transpose staging elided, unfused f32).
   **ALG-VERIFIED** via `python/run_avscuda_resample.py` (1230 cases vs
   `sim/avscuda_resample_ref.cpp`). AvsCUDA is now fully ported (18/18).
+- `nnedi3_pad.cl`: **NNEDI3 batch-1 (pad/copy)** — in-place mirror pads
+  `kn_pad_h/v` (group-id idiom, interior origin), plain `kn_copy`, and the
+  fused `kn_pad_ref_and_copy_half` (per-vector grid, lane reversal on
+  x-mirror). **ALG-VERIFIED** via `python/run_nnedi3_pad.py` (600 cases vs
+  `sim/nnedi3_pad_ref.cpp`). Family map in `docs/NNEDI3_PORT_SPEC.md`.
 
 ## How the port is validated (no GPU/OpenCL needed)
 

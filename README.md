@@ -269,6 +269,13 @@ Makefile                       # make test  (no OpenCL required)
   fused `kn_pad_ref_and_copy_half` (per-vector grid, lane reversal on
   x-mirror). **ALG-VERIFIED** via `python/run_nnedi3_pad.py` (600 cases vs
   `sim/nnedi3_pad_ref.cpp`). Family map in `docs/NNEDI3_PORT_SPEC.md`.
+- `nnedi3_prescreen.cl`: **NNEDI3 batch-2 (prescreener)** — `kn_prescreening`,
+  the 48-tap int neighbourhood net + unfused-f32 squash tail, the
+  scan-compacted `workNN`/`numblocks` work list (no atomics; Hillis-Steele
+  stands in for upstream's warp-shuffle scan, bit-identically) and the
+  bicubic fast path. Fixed `reqd_work_group_size(32,16,1)`.
+  **ALG-VERIFIED** via `python/run_nnedi3_prescreen.py` (66 cases vs
+  `sim/nnedi3_prescreen_ref.cpp`, 7 mutants caught).
 
 ## How the port is validated (no GPU/OpenCL needed)
 

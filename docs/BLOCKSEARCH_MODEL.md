@@ -160,29 +160,49 @@ Captured faithfully (transliteratable): the pure helpers (§5), the per-block
 cost/SAD/expanding-refine arithmetic, the predictor-setup ordering, and the
 `CPU_EMU=true` deterministic reduce semantics.
 
-NOT resolvable without the MV.cpp host assembly (so a blind port would be
-unverifiable and risky to claim "complete"):
-1. **Exact multi-row `vectors[]` layout** tying `blkIdx = blky*nBlkX+blkx` to
-   the per-row sentinels (`[-2]/[-1]`) and the appended copy region
-   (`+nBlkX*nBlkY`) for arbitrary `nBlkY` rows and `vectorsPitch`. The predictor
-   slot values (`REF_VECTOR_INDEX[0..5]` = data[4..9]) dereference this array,
-   so resolving `median(left,up,bottom-right)` and the own/left/up MVs depends on
-   it. §2 assumed a row==grid, but a multi-row per-batch search needs the exact
-   host stride/offset convention from MV.cpp's launcher.
-2. **Reference (super-frame) plane origin**: `dev_get_ref_block` is given a
-   pointer already advanced to the block top-left (`&plane[offx+offy*nPitch]`),
-   and the block SAD then reads the BLK_SIZE×BLK_SIZE source window from a
-   shared tile at row stride BLK_SIZE while reading the ref window at stride
-   `nPitch`. The exact source-tile→ref alignment (does the ref window start at
-   the same offx,offy as the source block, plus the NPEL sub-plane offset?) must
-   be confirmed from `MV.cpp`'s plane construction before the SAD is correct.
-3. **Batch / work-stealing mapping to OpenCL**: CUDA launches one block per
-   batch column (`blocks(batch, min(nBlkX,nBlkY))`) that work-steals columns via
-   a shared `next` counter and spin-waits on `prog[]` for the ANALYZE_SYNC=1
-   left-column dependency. Reproducing this needs an OpenCL host that either
-   serialises columns in dependency order or emulates the spin/atomic handshake
-   — a host-side decision, not a kernel transliteration.
+### 8a. RESOLVED for `kl_calc_all_sad` (read out of MVKernel.cu)
 
-These three items are the concrete on-rig tasks to finish `kl_search`; they are
-all host/layout questions that a device bring-up (docs/HOST_CONTRACT.md) will
-answer empirically.
+Items 1 and 2 below were open because §2 guessed at the host assembly. They
+are now settled *for this kernel* by reading the source, and
+`kt_calc_all_sad` is ALG-VERIFIED accordingly
+(`python/run_mv_calc_all_sad.py`):
+
+- **`vectors` is plain row-major `short2`**, indexed `[bx + by*nBlkX]`
+  (`SearchBatch`, MVKernel.cu:819; the kernel's own read at :1122). No
+  sentinels, no `vectorsPitch`, no appended copy region — that machinery
+  exists only for `kl_search`'s predictor slots, which dereference
+  `REF_VECTOR_INDEX` (:299). Two ABI bugs in the port were found and fixed
+  by this: it had declared `vectors` as `int2*` (8 bytes/entry instead of
+  4) and `out` as OpenCL `int3*` (16-byte stride) where upstream's
+  `VECTOR {int x,y,sad}` (common/KMV.h:6) is packed 12.
+- **Reference origin**: `&pRef[offx + offy*nPitch]` passed through
+  `dev_get_ref_block`, which the port's `kt_ref_block_offset` reproduces
+  exactly; chroma uses base `(offx>>1, offy>>1)` with the MV halved
+  (`vx>>1, vy>>1`), and `offx/offy = nPad + blk*(BLK_SIZE/2)`.
+- **Reachable grid**: upstream instantiates BLK_SIZE {8,16,32} x NPEL
+  {1,2} x CHROMA (:2631). So `BLK_SIZE == 4` — whose luma loop bound
+  `BLK_SIZE/8` would be zero, silently producing a luma SAD of 0 — is
+  unreachable, as is `NPEL == 4` for this kernel. The port stays generic;
+  the runner covers the reachable grid plus NPEL 4 for the shared helper.
+- **Thread split is not observable**: the CUDA kernel spreads the window
+  over `BLK_SIZE*8` threads (`x = tid % BLK_SIZE`, `yy = y, y+8, ...`) and
+  chroma over three `BLK_SIZE_UV` cases, then `dev_reduce`s. All of it is
+  integer absolute-difference addition, so the scalar double loop is exact.
+
+### 8b. STILL blocking `kl_search`
+
+1. **Predictor slot layout.** The sentinel (`[-2]/[-1]`) and appended copy
+   region (`+nBlkX*nBlkY`) convention, and `vectorsPitch`, still have to be
+   pinned for the `REF_VECTOR_INDEX[0..5]` (= `data[4..9]`) reads that
+   resolve `median(left, up, bottom-right)` and the own/left/up MVs. §8a
+   settles only the *direct* `[bx + by*nBlkX]` access.
+2. **Batch / work-stealing mapping to OpenCL.** CUDA launches one block per
+   batch column (`blocks(batch, min(nBlkX,nBlkY))`) that work-steals columns
+   via a shared `next` counter and spin-waits on `prog[]` for the
+   `ANALYZE_SYNC=1` left-column dependency. Reproducing this needs an
+   OpenCL host that either serialises columns in dependency order or
+   emulates the spin/atomic handshake — a host-side decision, not a kernel
+   transliteration.
+
+Both remaining items are host/layout questions that a device bring-up
+(`docs/HOST_CONTRACT.md`) will answer empirically.

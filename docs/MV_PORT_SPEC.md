@@ -166,9 +166,10 @@ per-plane KTGMC kernels.
   (refBaseB/F) as resolved inputs — that resolution is the host/rig seam (§6.1).
 - **RIG-VERIFY** (faithful source ports, device run pending): the frame padding
   / mirror-copy kernels (`kt_copy_pad`, `kt_pad_frame_h/v`), `kt_init_scene_change`,
-  `kt_most_freq_mv`, the block-search pure helpers (`kt_clip_mv`/`kt_check_mv`/
-  `kt_sq_norm`/`kt_ref_block_offset`), and the first block-level kernel
-  `kt_calc_all_sad` (per-block SAD vs the MV-selected ref block). These follow
+  `kt_most_freq_mv`, and the block-search pure helpers (`kt_clip_mv`/`kt_check_mv`/
+  `kt_sq_norm`/`kt_ref_block_offset`). (`kt_calc_all_sad` has since GRADUATED to
+  ALG-VERIFIED — its host layout was resolved from MVKernel.cu; see
+  `docs/BLOCKSEARCH_MODEL.md` §8a and `python/run_mv_calc_all_sad.py`.) These follow
   the authoritative host model in `docs/BLOCKSEARCH_MODEL.md`. That doc records
   the key fact that the shipped CUDA launches compile with `CPU_EMU=true` — the
   search runs the deterministic, CPU-ordered scalar path (not warp shuffles), so
@@ -183,7 +184,8 @@ sandbox because their inputs come from the `SearchBatchData` super-frame host
 struct (built by the `MV.cpp` host state machine) and/or use warp/block
 reduction geometry. Concretely, the unported set splits into:
 
-- **Now ported (RIG-VERIFY):** `kl_calc_all_sad` and the pure helpers
+- **Now ported:** `kl_calc_all_sad` (**ALG-VERIFIED**, §8a of
+  `docs/BLOCKSEARCH_MODEL.md`) and the pure helpers (RIG-VERIFY)
   `dev_check_mv` / `dev_clip_mv` / `dev_sq_norm` / `dev_get_ref_block`
   (`kt_ref_block_offset`), which the block kernels share.
 - **Intrinsic to the warp/block `Search` driver** (only meaningful inside the

@@ -887,8 +887,23 @@ static int kt_ref_block_offset(int vx, int vy, int nPitch, int nImgPitch, int NP
  *      partials are pure absolute-difference integer additions, order
  *      independent, so a scalar double loop reproduces the total exactly (the
  *      packed __vabsdiff4 / funnel-shift loads are load optimizations only).
- *      // RIG-VERIFY: super-frame pSrc/pRef plane addresses + MV layout follow
- *      // docs/BLOCKSEARCH_MODEL.md; confirm against the CUDA build on a rig.
+ *      Layout, resolved from MVKernel.cu (kernel at :1122, SearchBatch at
+ *      :819, launcher at :2486, instantiation table at :2631) — this kernel
+ *      needs NONE of the sentinel/pitch machinery kl_search's predictors
+ *      use:
+ *        - vectors is a PLAIN row-major `short2` array indexed
+ *          `[bx + by*nBlkX]` — 2 shorts per entry, no sentinels, no
+ *          vectorsPitch, no appended copy region.
+ *        - ref base is `&pRefY[offx + offy*nPitchY]` passed through
+ *          dev_get_ref_block (identical to kt_ref_block_offset above);
+ *          chroma uses base `(offx>>1, offy>>1)` with MV `(vx>>1, vy>>1)`.
+ *        - out is the 12-byte packed `VECTOR {int x, y, sad}` (common/KMV.h),
+ *          i.e. 3 ints per block — NOT an OpenCL int3, whose stride is 16.
+ *      Upstream instantiates BLK_SIZE in {8,16,32} x NPEL in {1,2} x CHROMA,
+ *      so BLK_SIZE == 4 (whose luma loop `BLK_SIZE/8` would be a no-op) and
+ *      NPEL == 4 are unreachable for this kernel; the port stays generic and
+ *      the runner covers the reachable grid.
+ *      // ALG-VERIFIED via python/run_mv_calc_all_sad.py.
  * -------------------------------------------------------------------------*/
 kernel void kt_calc_all_sad(
     __global const PX* __restrict pSrcY,
@@ -897,9 +912,9 @@ kernel void kt_calc_all_sad(
     __global const PX* __restrict pRefY,
     __global const PX* __restrict pRefU,
     __global const PX* __restrict pRefV,
-    __global const int2* __restrict vectors,   /* MV per block (x,y) */
+    __global const short* __restrict vectors,  /* short2 per block: x,y */
     __global       int*  __restrict dst_sad,   /* int per block */
-    __global       int3* __restrict out,       /* VECTOR per block */
+    __global       int*  __restrict out,       /* VECTOR per block: x,y,sad */
     int nBlkX, int nBlkY, int nPad,
     int BLK_SIZE, int NPEL, int chroma,
     int nPitchY, int nPitchUV,
@@ -914,10 +929,12 @@ kernel void kt_calc_all_sad(
     int offx = nPad + bx * blkStep;
     int offy = nPad + by * blkStep;
 
-    int2 xy = vectors[bx + by * nBlkX];
+    int blk = bx + by * nBlkX;
+    int xy_x = (int)vectors[blk * 2 + 0];
+    int xy_y = (int)vectors[blk * 2 + 1];
     int sad = 0;
 
-    int roff = kt_ref_block_offset(xy.x, xy.y, nPitchY, nImgPitchY, NPEL);
+    int roff = kt_ref_block_offset(xy_x, xy_y, nPitchY, nImgPitchY, NPEL);
     for (int jy = 0; jy < BLK_SIZE; jy++) {
         for (int jx = 0; jx < BLK_SIZE; jx++) {
             int a = (int)pSrcY[(offx + jx) + (offy + jy) * nPitchY];
@@ -931,7 +948,7 @@ kernel void kt_calc_all_sad(
         int bs2 = BLK_SIZE >> 1;
         int baseUx = offx >> 1;
         int baseUy = offy >> 1;
-        int roffUV = kt_ref_block_offset(xy.x >> 1, xy.y >> 1,
+        int roffUV = kt_ref_block_offset(xy_x >> 1, xy_y >> 1,
                                          nPitchUV, nImgPitchUV, NPEL);
         for (int jy = 0; jy < bs2; jy++) {
             for (int jx = 0; jx < bs2; jx++) {
@@ -951,10 +968,10 @@ kernel void kt_calc_all_sad(
         }
     }
 
-    dst_sad[bx + by * nBlkX] = sad;
-    out[bx + by * nBlkX].x = xy.x;
-    out[bx + by * nBlkX].y = xy.y;
-    out[bx + by * nBlkX].z = sad;
+    dst_sad[blk] = sad;
+    out[blk * 3 + 0] = xy_x;
+    out[blk * 3 + 1] = xy_y;
+    out[blk * 3 + 2] = sad;
 }
 
 /* ---------------------------------------------------------------------------

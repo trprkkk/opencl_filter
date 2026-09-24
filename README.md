@@ -106,10 +106,15 @@ Makefile                       # make test  (no OpenCL required)
   hpad/vpad border), and the degrain/compensate pixel-combiner core
   `kt_degrain_patch` + `kt_overlap_out` (the full Degrain1to6_C/Overlaps_C/
   Short2Bytes overlap arithmetic, ALG-VERIFIED vs the MV.cpp staging mirror).
+  `kt_calc_all_sad` (per-block SAD vs the MV-selected ref block) is
+  **ALG-VERIFIED** via `python/run_mv_calc_all_sad.py` (36 cases vs
+  `sim/mv_calc_all_sad_ref.cpp`): its host layout was settled by reading
+  MVKernel.cu, which also exposed two ABI bugs in the port (`vectors` is
+  `short2`, not `int2`; `out` is a packed 12-byte `VECTOR`, not `int3`) —
+  see `docs/BLOCKSEARCH_MODEL.md` §8a.
   **RIG-VERIFY** (device run pending): frame padding / mirror copy,
-  `kt_most_freq_mv` (smallest-mode seed), the block-search pure helpers, and the
-  first block-level kernel `kt_calc_all_sad` (per-block SAD; host model in
-  `docs/BLOCKSEARCH_MODEL.md`). The remaining search / degrain-block /
+  `kt_most_freq_mv` (smallest-mode seed), and the block-search pure helpers.
+  The remaining search / degrain-block /
   compensate kernels need the MV.cpp host state machine + super-frame sub-pel
   layout (see `docs/MV_PORT_SPEC.md`, `docs/CODEX_HANDOFF.md`).
 - `kfm_deband.cl`: **KFM KDeband core** — `kf_deband_reduce_banding`, faithful to

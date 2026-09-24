@@ -23,18 +23,18 @@
  * 4 leaves the tail pixels UNTOUCHED.
  *
  * -- UPSTREAM DEFECT, transcribed faithfully --------------------------------
- * The CUDA LUT dispatcher `lut_cuda_16` (lut_kernel.cu:157-165) instantiates
+ * The CUDA LUT dispatcher `lut_cuda_16` (lut_kernel.cu:156-165) instantiates
  * `bits_per_pixel = 8` for ALL of 10/12/14/16-bit, so the 16-bit kernels get
  * shift 8 and `mask = (1 << 8) - 1 = 255`, while the host builds the table
  * with the REAL depth (`idx = (x << bits_per_pixel) + y` over `1 << bits`
- * entries, lut_data.cpp:25-30) and the CPU path indexes it that way
+ * entries, lut_data.cpp:27) and the CPU path indexes it that way
  * (lutxy.cpp:30).  Consequences on the CUDA path, all reproduced here
  * because this is a transcription, not a fix:
  *   - lut_x   16-bit: reads lut[X & 255] — only the first 256 entries.
  *   - lut_xy  16-bit: ((X << 8) + Y) & 255 == Y & 255 — X is dropped
  *     entirely and the result depends only on the second clip.
  *   - lut_xyz 16-bit: likewise collapses to Z & 255 (and the 16-bit
- *     3-input table is not even built upstream — lut_data.cpp:32-42 has
+ *     3-input table is not even built upstream — lut_data.cpp:32 has
  *     `case 3` commented out).
  * The port takes `lut_bits` and `mask` as arguments so the host decides;
  * a host mirroring upstream passes 8/255 for every 16-bit depth.  Flagged

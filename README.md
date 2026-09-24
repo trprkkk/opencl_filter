@@ -69,6 +69,7 @@ full kernel-by-kernel roadmap and how to extend the set.
 
 ```
 docs/PORT_PLAN.md              # port strategy + per-kernel roadmap + licensing
+docs/RIG_HANDOFF_BRINGUP.md    # ** START HERE for rig work ** repo-wide bring-up handoff
 docs/MV_PORT_SPEC.md           # motion-engine data model + kernel inventory + rig test plan
 docs/HOST_CONTRACT.md          # on-rig OpenCL host runner spec (builds, grids, buffer layout)
 docs/BLOCKSEARCH_MODEL.md      # KTGMC block-search host model (SearchBatch, super-frame, CPU_EMU)
@@ -77,7 +78,11 @@ docs/KFM_PORT_SPEC.md          # KFM filter-family map + verified/next status
 docs/RIG_HANDOFF_KDEBLOCK.md   # verification handoff spec for the provisional KDeblock kernels
 docs/AVSCUDA_PORT_SPEC.md      # AvsCUDA family map + batch status (18/18 ported)
 docs/RIG_HANDOFF_AVSCUDA_CONDITIONAL.md  # device-run handoff for the 2 float RIG-VERIFY reductions
+docs/MASKTOOLS_PORT_SPEC.md    # masktools CUDA surface (5/5) + the 16-bit LUT defect
+docs/NNEDI3_PORT_SPEC.md       # NNEDI3 6-kernel census + batch verification records
 docs/PERF_NOTES.md             # static perf pass: work-group contracts, atomics, vectorization
+src/opencl/masktools/kernels/  # OpenCL kernel sources: masktools fill/copy/LUT
+src/opencl/nnedi3/kernels/     # OpenCL kernel sources: NNEDI3 pad/prescreen/compute
 src/opencl/ktgmc/kernels/      # OpenCL kernel sources: KTGMC motion/simple
 src/opencl/kfm/kernels/        # OpenCL kernel sources: KFM (deband/edgelevel/temporalnr/mergestatic/filterbase/noiseclip/deblock/deblock_rig .cl)
 src/opencl/avscuda/kernels/    # OpenCL kernel sources: AvsCUDA (merge/filters/convert/conditional/conditional_rig/resample)

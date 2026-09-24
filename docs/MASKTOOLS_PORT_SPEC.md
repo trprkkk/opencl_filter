@@ -42,18 +42,18 @@ family in the suite to port and the easiest to prove.
 
 ## 3. Upstream defect found and transcribed (do not "fix" blindly)
 
-`lut_cuda_16` (lut_kernel.cu:157-165) instantiates the kernels with
+`lut_cuda_16` (lut_kernel.cu:156-165) instantiates the kernels with
 `bits_per_pixel = 8` for **all** of 10/12/14/16-bit, so the 16-bit kernels
 run with shift 8 and `mask = 255`. But the host builds the table with the
 REAL depth — `idx = (x << bits_per_pixel) + y` over `1 << bits` entries
-(`lut_data.cpp:25-30`) — and the CPU path indexes it that way
+(`lut_data.cpp:27`, loop at :25-30) — and the CPU path indexes it that way
 (`lutxy.cpp:30`). On the CUDA path this means:
 
 - `lut_x` 16-bit reads only `lut[X & 255]`, the first 256 entries.
 - `lut_xy` 16-bit: `((X << 8) + Y) & 255 == Y & 255` — **X is dropped
   entirely**; the output depends only on the second clip.
 - `lut_xyz` 16-bit collapses to `Z & 255`; the 16-bit 3-input table is not
-  even built (`lut_data.cpp:32-42`, `case 3` is commented out).
+  even built (`lut_data.cpp:32`, `case 3` is commented out).
 
 The port transcribes this faithfully and takes `lut_bits`/`mask` as host
 arguments (a host mirroring upstream passes 8/255 at every 16-bit depth).

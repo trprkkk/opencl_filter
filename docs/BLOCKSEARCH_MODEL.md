@@ -35,7 +35,8 @@ template<typename pixel_t> struct SearchBatch {
   int* dst_sad;                // int per block
   const SearchBlock* blocks;   // 17 ints per block (data[12]+dataf[5])
   short2* vectors;             // int2, per MV row incl. sentinels
-  volatile int* prog;          // per column search progress
+  int* prog;                   // per column search progress (NOT volatile
+                               // since bd903d0; published/acquired with atomics)
   int* next;                   // work-stealing counter
   const pixel_t *pSrcY,*pSrcU,*pSrcV;   // source (search) plane block base
   const pixel_t *pRefY,*pRefU,*pRefV;   // reference (super-frame) planes
@@ -150,7 +151,8 @@ candidate predictors (zero/global/own/left/up/median), running
 `dev_expanding_search_1/2` + `dev_hex2_search_1` or the exhaustive path, keeping
 the lowest-cost `CostResult` (`dev_reduce_result<…,CPU_EMU=true>` serial scan),
 then writes the winning `short2` back to `vectors[blky*nBlkX+blkx]`, fences, and
-sets `prog[blkx]=blky` for the ANALYZE_SYNC=1 dependency wait. Porting this is
+publishes progress with `atomicExch(&prog[blkx], blky)` for the ANALYZE_SYNC=1
+dependency wait. Porting this is
 the remaining large work and is strictly `RIG-VERIFY` (device-dependent for
 validation, but deterministic under CPU_EMU=true).
 
@@ -198,7 +200,7 @@ are now settled *for this kernel* by reading the source, and
    settles only the *direct* `[bx + by*nBlkX]` access.
 2. **Batch / work-stealing mapping to OpenCL.** CUDA launches one block per
    batch column (`blocks(batch, min(nBlkX,nBlkY))`) that work-steals columns
-   via a shared `next` counter and spin-waits on `prog[]` for the
+   via `atomicAdd(next, 1)` and spin-waits on `prog[]` for the
    `ANALYZE_SYNC=1` left-column dependency. Reproducing this needs an
    OpenCL host that either serialises columns in dependency order or
    emulates the spin/atomic handshake — a host-side decision, not a kernel
@@ -206,3 +208,26 @@ are now settled *for this kernel* by reading the source, and
 
 Both remaining items are host/layout questions that a device bring-up
 (`docs/HOST_CONTRACT.md`) will answer empirically.
+
+### 8c. This mechanism is actively in flux upstream — do not guess it
+
+The synchronisation described in 8b.2 is the part of the codebase upstream
+has been changing most recently, which is a further argument for porting it
+only against a running rig:
+
+- `3b1f44d` (2026-05-06) switched the CUDA search to **static** column
+  assignment.
+- `bd903d0` (2026-09-20, the commit just before our pin, KVersion
+  0.7.4 -> 0.7.5) **restored dynamic** assignment and reworked the sync:
+  `prog` lost its `volatile` qualifier, the spin-wait became
+  `while (atomicAdd(&prog[...], 0) < blky) {}` followed by `__threadfence()`,
+  the publish became `atomicExch(&prog[blkx], blky)`, column pickup became
+  `atomicAdd(next, 1)`, and extra `__syncthreads()` were added inside
+  `dev_expanding_search_1/2` and `dev_hex2_search_1`. The upstream comment
+  states the intent: use atomics + fences so the publish/acquire ordering
+  holds on older CUDA generations too.
+
+So the handshake has flip-flopped within one release cycle. Any OpenCL
+mapping should be written against the pinned commit and re-checked whenever
+the pin moves; §5's helper transcriptions are unaffected (they are pure
+functions), and `kl_calc_all_sad` was not touched by either commit.

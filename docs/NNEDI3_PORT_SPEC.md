@@ -6,6 +6,15 @@ All line numbers below are 1-based at that commit. The file holds exactly
 6 `__global__` kernels (771 lines); the rest of the submodule is host,
 weights, and CPU (ASM/intrinsic) paths, all out of scope.
 
+> **Provenance note.** `01931aa` (2026-09-20) is the tip our pin points at.
+> That commit — and the parent repo commit `68aef6e` that bumped the
+> submodule to it — only changed **host SIMD** code ("SIMD定数を配列化して
+> ロード時のAVX命令実行を防ぐ": array-ify SIMD constants to avoid executing
+> AVX at load time). The CUDA file this port transcribes,
+> `nnedi3/nnedi3_kernel.cu`, was last touched in 2025-05-07 (`091e594`,
+> a Linux-build fix), so the device semantics captured here are current and
+> were not affected by the recent activity.
+
 ## 1. Census (6/6 kernels)
 
 | # | CUDA kernel | Lines | OpenCL port | Batch | Status |

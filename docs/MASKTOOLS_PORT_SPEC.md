@@ -20,6 +20,9 @@ Launch wrappers: `Functions::memset_plane{,_16,_32}_cuda` (:26/:37/:48),
 `Functions::copy_plane_cuda` (:72), `lut_cuda` (:120) and its depth
 dispatcher `lut_cuda_16` (:157).
 
+(`24ba826` dates from 2025-05-11 and is the submodule tip our pin
+references; the CUDA files here have not changed since.)
+
 All five are elementwise with 2D bounds guards — no `__local`, no
 reductions, no work-group-size constraint, no floating-point arithmetic
 (the f32 fill only moves bit patterns). That makes this the cheapest

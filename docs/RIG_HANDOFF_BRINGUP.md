@@ -219,9 +219,11 @@ both of which are **host decisions, not transliteration**:
 1. **Predictor slot layout** — the sentinel (`[-2]/[-1]`), the appended
    copy region (`+nBlkX*nBlkY`) and `vectorsPitch`, as consumed by the
    `REF_VECTOR_INDEX[0..5]` reads that resolve median/own/left/up MVs.
-2. **Batch / work-stealing mapping** — CUDA launches
+2. **Batch / work-stealing mapping** (note: reworked in the commit
+   immediately before our pin, and it flip-flopped static/dynamic within one
+   release cycle — see `docs/BLOCKSEARCH_MODEL.md` §8c) — CUDA launches
    `blocks(batch, min(nBlkX,nBlkY))`, steals columns through a shared
-   `next` counter, and spin-waits on `prog[]` for the `ANALYZE_SYNC=1`
+   `atomicAdd(next,1)`, and spin-waits on `prog[]` for the `ANALYZE_SYNC=1`
    left-column dependency. OpenCL has no portable equivalent; either
    serialise columns in dependency order from the host, or emulate the
    handshake with atomics and accept the portability cost.
@@ -254,7 +256,10 @@ and the audit fails if any runner is not wired in.
 
 ## 6. Ground truth and reproduction
 
-- Upstream: `rigaya/AviSynthCUDAFilters` @ `68aef6e`, submodules
+- Upstream: `rigaya/AviSynthCUDAFilters` @ `68aef6e` — **verified to be the
+  tip of `origin/master`** (2026-09-20, KVersion 0.7.5); the two newest
+  upstream commits are exactly the NNEDI3 submodule bump we ported and the
+  KTGMC search-sync rework. Submodules
   `rigaya/NNEDI3` @ `01931aa` and `rigaya/masktools` @ `24ba826`. KFM
   Deblock references commit `cceb8da` (see that handoff).
 - `third_party/grunt/` is vendored **verbatim** (not ported — GRunT has no

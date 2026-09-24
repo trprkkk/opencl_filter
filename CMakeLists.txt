@@ -29,6 +29,21 @@ if(OpenCL_FOUND)
   set_target_properties(avscuda_rig_host PROPERTIES CXX_STANDARD 17)
 endif()
 
+# --- Optional: GRunT (verbatim upstream CPU plugin, Windows-only) ------------
+# GRunT has no CUDA upstream, so it is vendored as-is (third_party/grunt/)
+# instead of ported. Builds only on Windows with AviSynthPlus headers.
+# Untested here (no Windows, no cmake in this sandbox).
+if(WIN32)
+  find_path(AVISYNTH_INCLUDE_DIR avisynth.h
+            PATHS "$ENV{AVISYNTH_SDK}/include"
+            DOC "AviSynthPlus headers (for the GRunT plugin)")
+  if(AVISYNTH_INCLUDE_DIR)
+    add_library(GRunT SHARED third_party/grunt/GRunT.cpp)
+    target_include_directories(GRunT PRIVATE ${AVISYNTH_INCLUDE_DIR})
+    set_target_properties(GRunT PROPERTIES CXX_STANDARD 17 OUTPUT_NAME "GRunT")
+  endif()
+endif()
+
 enable_testing()
 add_test(NAME ktgmc_validation
          COMMAND ${CMAKE_COMMAND} -E env

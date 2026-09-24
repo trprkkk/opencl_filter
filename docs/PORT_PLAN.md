@@ -17,7 +17,8 @@ KTGMC is split into three CUDA files plus AVS glue:
 
 Other suite projects (next milestones after KTGMC): `KNNEDI3` (neural-net
 upscaler), `KFM` (KDeband, Deblock, CombingAnalyze, DecombeUCF, MergeStatic…),
-`AvsCUDA` (AviSynthNeo CUDA plumbing), `GRunT`, `masktools`.
+`AvsCUDA` (AviSynthNeo CUDA plumbing), `GRunT` (no CUDA upstream — vendored
+verbatim at `third_party/grunt/`), `masktools`.
 
 ## 2. Strategy
 

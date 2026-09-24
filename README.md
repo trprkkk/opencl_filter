@@ -82,6 +82,7 @@ src/opencl/ktgmc/kernels/      # OpenCL kernel sources: KTGMC motion/simple
 src/opencl/kfm/kernels/        # OpenCL kernel sources: KFM (deband/edgelevel/temporalnr/mergestatic/filterbase/noiseclip/deblock/deblock_rig .cl)
 src/opencl/avscuda/kernels/    # OpenCL kernel sources: AvsCUDA (merge/filters/convert/conditional/conditional_rig/resample)
 src/host/                      # OpenCL host harnesses (rig-only; need an ICD, not in make test)
+third_party/grunt/             # verbatim upstream GRunT (CPU-only AviSynth plugin, no CUDA to port)
 sim/ktgmc_cpu_ref.cpp          # scalar CPU mirror of the kernels (validates logic)
 python/run_validation.py       # independent Python golden + cross-check harness
 Makefile                       # make test  (no OpenCL required)

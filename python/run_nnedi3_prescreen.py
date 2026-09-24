@@ -128,6 +128,9 @@ def main():
             rng.shuffle(order)
             for c in range(4):
                 wfv[24 + c] = order[c]
+        # the mirror receives these as f32 bit patterns: round first so the
+        # golden multiplies by exactly what the mirror sees
+        wfv = [F(v) for v in wfv]
         wf_bits = [FB(v) for v in wfv]
 
         hdr = [ord('P'), w4, h, rp4, dp4, val_min, val_max,

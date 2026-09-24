@@ -276,6 +276,14 @@ Makefile                       # make test  (no OpenCL required)
   bicubic fast path. Fixed `reqd_work_group_size(32,16,1)`.
   **ALG-VERIFIED** via `python/run_nnedi3_prescreen.py` (66 cases vs
   `sim/nnedi3_prescreen_ref.cpp`, 7 mutants caught).
+- `nnedi3_compute.cl`: **NNEDI3 batch-3 (predictor net)** — `kn_compute_nn`,
+  one runtime-parameterised kernel replacing upstream's 70 template
+  instantiations (all seven `ReadPixelNxM` policies stage the same logical
+  tile). Reproduces the order-significant butterfly reduction tree and the
+  `dev_expf` bit-twiddle exactly. **ALG-VERIFIED** via
+  `python/run_nnedi3_compute.py` (28 cases vs `sim/nnedi3_compute_ref.cpp`,
+  comparing pre-rounding float bits, with enforced branch coverage).
+  **KNNEDI3 is now fully ported (6/6).**
 
 ## How the port is validated (no GPU/OpenCL needed)
 

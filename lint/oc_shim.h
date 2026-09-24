@@ -58,6 +58,11 @@ static int _gi[3], _li[3], _gid[3], _ls[3], _ng[3];
 #define dot(a,b)   (a)
 #define cross(a,b) (a)
 #define mad(a,b,c) ((a)*(b)+(c))
+#define sqrt(x)    (x)
+#define rsqrt(x)   (x)
+#ifndef FLT_EPSILON
+#define FLT_EPSILON 1.1920928955078125e-7f
+#endif
 #define convert_int(x)    ((int)(x))
 #define convert_uint(x)   ((uint)(x))
 #define convert_float(x)  ((float)(x))

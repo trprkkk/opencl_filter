@@ -15,7 +15,7 @@ weights, and CPU (ASM/intrinsic) paths, all out of scope.
 | 3 | `kl_copy` | 73–81 | `kn_copy` (`nnedi3_pad.cl`) | 1 | ALG-VERIFIED |
 | 4 | `kl_pad_ref_and_copy_half` | 88–131 | `kn_pad_ref_and_copy_half` (`nnedi3_pad.cl`) | 1 | ALG-VERIFIED |
 | 5 | `kl_prescreening` | 135–238 | `kn_prescreening` (`nnedi3_prescreen.cl`) | 2 | ALG-VERIFIED (66-case runner + 7 mutants, §4) |
-| 6 | `kl_compute_nn` | 332–~470 | `kn_compute_nn` (`nnedi3_compute.cl`, planned) | 3 | not started |
+| 6 | `kl_compute_nn` | 331–475 | `kn_compute_nn` (`nnedi3_compute.cl`) | 3 | ALG-VERIFIED (28-case runner + mutants, §5) |
 
 Launch wrappers: `CopyPadCUDA` (:491), `BitBltCUDA` (:512),
 `PadRefAndCopyHalfCUDA` (:520, hpad=32/vpad=3). Caller passes the
@@ -99,15 +99,85 @@ Independence and adequacy of the proof:
   output layer and set the four biases to `{+0.0, -0.0, +denorm, -denorm}`,
   which pins the comparison (and `-0.0 <= 0` rejecting) exactly.
 
-## 5. Batch-3 preview (not started)
+## 5. Batch-3 (compute_nn): what was verified
 
-- `kl_compute_nn`: block-level (`bid`, `workoff`), shared `B` tile +
-  float `avg`, weights as kernel args (`short2`/`float2` + pitches —
-  synthetic weights suffice for verification; the 13.5 MB `binary1.bin`
-  is never needed in-repo). Device math is f32 + int, but note
-  `dev_expf` (:318): a bit-twiddling exp approximation (clamp to ±80,
-  multiply by 12102203.161561486f, add 1064866805.0f, reinterpret the int
-  as float) — exactly reproducible, and it must be transcribed as such
-  rather than mapped onto `native_exp`/`exp`. Four `ReadPixelNxM` staging
-  policies (8x6/16x6/32x6/48x6 and the 8x4/16x4/32x4 variants) select the
-  tile loader per xdia/ydia; `NN_BLOCK_W/H` = 16/32.
+`src/opencl/nnedi3/kernels/nnedi3_compute.cl` + `sim/nnedi3_compute_ref.cpp`
++ `python/run_nnedi3_compute.py` (28 cases = 14 shapes x both PX widths,
+covering every upstream READ policy, both QUAL values, the NN ladder
+16..256, and work-list lengths nb in {0,1,2,15,31,32,33,40,64,65} so the
+`b` loop and its `b+ty >= nb` tail are exercised).
+
+**The 70 template instantiations collapse to one kernel.** Upstream
+instantiates QUAL{1,2} x NN{16,32,64,128,256} x READ{8x6,16x6,32x6,48x6,
+8x4,16x4,32x4}. All seven ReadPixelNxM policies were shown to stage the
+identical logical tile — `B[ty][k] == src[(k % xdia) + (k / xdia)*pitch]`,
+`K = xdia*ydia` — differing only in which thread loads which element, so
+the port takes qual/nn/xdia/ydia as runtime arguments with one strided
+loader and a `__local` tile sized for the largest policy (K <= 288).
+
+**Order-significant float reductions.** `dev_reduce_warp<16>` is a
+shuffle-down butterfly (steps 8,4,2,1), so lane 0 gets a specific addition
+tree; a sequential sum differs in the last bits. The port rebuilds the
+same tree in `__local` (lanes 8..15 read outside their 16-lane row
+upstream, but those partials never flow back into lane 0, so clamping the
+read is equivalent). `dev_expf` is transcribed verbatim — it must not be
+replaced by `exp`/`native_exp`. Upstream's `(float)(1.0/(double)K)` is
+spelled `1.0f/(float)K` to avoid needing fp64; not a blanket identity, so
+it was checked exhaustively over every reachable K and qual.
+
+### How the proof was made adequate (three real defects, all in the test)
+
+The first version compared only the written pixels and **four mutants
+survived**, because the integer output rounds ULP-level differences away —
+including the two claims this port rests on (the reduction tree and
+`dev_expf`). Fixes:
+
+1. The mirror now also emits the **bit pattern of the pre-rounding float**
+   `result * (1/qual)` per written pixel, and the golden compares it. This
+   immediately exposed two genuine golden bugs: (a) the int reduction was
+   going through the float tree helper, silently rounding `sumsq` above
+   2^24, and (b) the golden multiplied by the raw `rng.uniform` doubles
+   while the mirror receives f32 bit patterns — both now fixed (ints
+   reduce exactly; weights are rounded with `F()` at generation). C's
+   int-to-float conversion before a multiply is likewise applied
+   explicitly.
+2. The runner **asserts branch coverage** and fails on any unreached
+   branch: `wsum > 1e-10` both ways, `var_ <= FLT_EPSILON` both ways,
+   clamping at both ends, and `dev_expf` both saturated and free. Two
+   dedicated regimes force them (a flat plane for zero variance; a -200
+   bias with the scale term zeroed so `dev_expf` saturates low and `wsum`
+   falls under the threshold).
+3. Re-run mutants: sequential sum, reversed tree steps, `dev_expf` clamp
+   +-80 -> +-81, `(5*v)/w` re-association, float-accumulated `sumsq`,
+   dropped squash, dropped rounding, transposed tile, wrong weight
+   striding — **all now caught**.
+
+Two mutants are provably **equivalent**, not gaps, and were left alone:
+
+- `dev_expf` bias `1064866805.0f` -> `...804.0f`: at 2^30 the f32 step is
+  128, so both literals are the same float.
+- `var_ <= FLT_EPSILON` -> `<`: for integer tiles the computed variance is
+  either exactly 0 (flat tile) or >= ~1/K^2, never within a ULP of
+  1.19e-7, so the boundary is unreachable. (`wsum > 1e-10` -> `>=` is the
+  same story; the branch itself is covered, only the exact-equality point
+  is unreachable.)
+
+### Upstream notes worth keeping
+
+- The whole Eval path is compiled for **uint8 only** (`#define pixel_t
+  uint8_t`, :482). The port is PX-generic and verified at both widths, but
+  16-bit is beyond upstream's reach; at 16-bit with large diameters
+  upstream's int32 `sumsq` would overflow, so the runner keeps pixel
+  magnitudes inside int32 for both accumulators.
+- Host preconditions: `ref` offset by
+  `-(((ydia>>1)-1)*refpitch + ((xdia>>1)-1))`, weights `wf = &ws[NN*K]`,
+  pitches `weights1pitch/2` and `/4`, and the SAME group grid the
+  prescreener used (bid indexes its work list).
+
+## 6. Family status
+
+All 6 NNEDI3 device kernels are ported and ALG-VERIFIED. Remaining work is
+rig-side only: build the three `.cl` files with a real OpenCL compiler,
+check the `reqd_work_group_size` and `__local` budgets on the target
+device (the compute tile is K_MAX*32 pixels), and compare against CUDA
+output with rounding tolerance where FP contraction may differ.

@@ -173,9 +173,9 @@ To get a working deinterlacer you must port the mvtools-equivalent layers:
 - **KNNEDI3**: self-contained neural-net 2× scaler; 6 `__global__` kernels
   (`docs/NNEDI3_PORT_SPEC.md`). Batch-1 done — the pad/copy helpers
   (`kn_pad_h/v`, `kn_copy`, `kn_pad_ref_and_copy_half`, 600 cases,
-  ALG-VERIFIED) and batch-2 too — `kn_prescreening`, the work-list
-  compaction and bicubic path (66 cases, ALG-VERIFIED). Only batch-3
-  (`kl_compute_nn`, incl. the `dev_expf` bit-twiddle) remains.
+  batch-2 (`kn_prescreening`) and batch-3 (`kn_compute_nn`) all
+  ALG-VERIFIED. **KNNEDI3 is fully ported (6/6)**; the 70 compute_nn
+  template instantiations collapse into one runtime-parameterised kernel.
 - **KFM**: MIT → cleanest to reuse/redistribute. **KDeband** (the smallest
   self-contained filter) was ported first, then **KEdgeLevel**,
   **KTemporalNR** and the **MergeStatic.cu** kernels. KDeband's

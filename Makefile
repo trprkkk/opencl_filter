@@ -44,6 +44,7 @@ test: ref lint
 	python3 python/run_avscuda_resample.py
 	python3 python/run_nnedi3_pad.py
 	python3 python/run_nnedi3_prescreen.py
+	python3 python/run_nnedi3_compute.py
 
 clean:
 	rm -rf build

@@ -284,6 +284,13 @@ Makefile                       # make test  (no OpenCL required)
   `python/run_nnedi3_compute.py` (28 cases vs `sim/nnedi3_compute_ref.cpp`,
   comparing pre-rounding float bits, with enforced branch coverage).
   **KNNEDI3 is now fully ported (6/6).**
+- `masktools_lut.cl`: **masktools, entire CUDA surface (5/5)** — `km_fill`
+  (+`_f32`), `km_copy_bytes`, and the LUT kernels `km_lut_x/xy/xyz`.
+  **ALG-VERIFIED** via `python/run_masktools_lut.py` (610 cases vs
+  `sim/masktools_lut_ref.cpp`). Transcribes — and pins with dedicated
+  assertions — an upstream CUDA defect where every 16-bit depth is
+  dispatched as 8-bit, collapsing the multi-clip LUT index
+  (`docs/MASKTOOLS_PORT_SPEC.md` §3).
 
 ## How the port is validated (no GPU/OpenCL needed)
 

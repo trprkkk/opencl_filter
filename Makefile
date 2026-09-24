@@ -45,6 +45,7 @@ test: ref lint
 	python3 python/run_nnedi3_pad.py
 	python3 python/run_nnedi3_prescreen.py
 	python3 python/run_nnedi3_compute.py
+	python3 python/run_masktools_lut.py
 
 clean:
 	rm -rf build

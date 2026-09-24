@@ -19,7 +19,7 @@ KTGMC kernels were. KDeband was chosen first (see docs/PORT_PLAN.md §5).
 |---|---|---|
 | `KDeband.cu` | `KTemporalNR`, `KDeband`, `KEdgeLevel` | **KDeband core done**; **KEdgeLevel done**; **KTemporalNR done** |
 | `KFMKernel.cu` | `KPatchCombe`, `KFMSwitch`, `KFMPad`, `KFMDecimate`, `AssumeDevice` | inventoried: host-only, no device kernels (see below; its only kernel dep `kl_merge` is ported as `kf_merge_block`) |
-| `CombingAnalyze.cu` | `KFMSuper`, `KCleanSuper`, `KPreCycleAnalyze(_Show)`, `KFMSuperShow`, `KTelecine(_Super)`, `KSwitchFlag`, `KContainsCombe`, `KCombeMask`, `KRemoveCombe` | not started |
+| `CombingAnalyze.cu` | `KFMSuper`, `KCleanSuper`, `KPreCycleAnalyze(_Show)`, `KFMSuperShow`, `KTelecine(_Super)`, `KSwitchFlag`, `KContainsCombe`, `KCombeMask`, `KRemoveCombe` | **all 15 device kernels done** (see the section below); only host pipelines remain |
 | `Deblock.cu` | `KDeblock`, `QPClip`, `ShowQP`, `FrameType` | **all 11 device kernels transcribed** (`kf_deblock`, `kf_make_qp_table`, `kf_deblock_show`, `kf_max_vh/v/h`, `kf_scale_qp`, `kf_sharpen_coeff`, `kf_merge_deblock` ALG-VERIFIED; `kf_sharpen`, `kf_show_sharpen_coeff` in the separate provisional `kfm_deblock_rig.cl`, `// RIG-VERIFY`, handoff spec in `docs/RIG_HANDOFF_KDEBLOCK.md`; QPClip is a no-op pass-through) |
 | `DecombeUCF.cu` | `KCFieldDiff`, `KCFrameDiffDup`, `KNoiseClip`, `KAnalyzeNoise`, `KDecombUCF*` | **device kernels 8/8 done** (KNoiseClip + 7 reductions, see below; only host pipelines remain) |
 | `MergeStatic.cu` | `KTemporalDiff`, `KAnalyzeStatic`, `KMergeStatic` | **all 6 pipeline kernels done** (KDeband.cu-style core; KAnalyzeStatic host glue in `kfm_filterbase.cl`/`kfm_mergestatic.cl`) |

@@ -119,10 +119,20 @@ Python golden (`sim/*_ref.cpp`, `python/run_*.py`). Start with:
 
 ## 5. Kernels intentionally NOT yet ported (deferred to full host assembly)
 
-The warp/shared `kl_search` block loop and the `kl_degrain_*`/`kl_compensate_*`
-block kernels. These additionally require the `MV.cpp` host state machine +
+The warp/shared `kl_search` block loop, and the two per-pixel accumulators
+`kl_degrain_2x3` / `kl_compensate_2x3` (race-free only under the host's
+disjoint `(nPatternX, nPatternY, M)` dispatch, so they are defined by that
+launch pattern). These additionally require the `MV.cpp` host state machine +
 super-frame sub-pel layout and are out of scope of this bring-up doc (see
-`docs/BLOCKSEARCH_MODEL.md` §8 for the exact remaining items).
+`docs/BLOCKSEARCH_MODEL.md` §8b for the exact remaining items).
+
+The two per-block *prepare* kernels ARE now ported, provisionally, as
+`kt_prepare_degrain` / `kt_prepare_compensate` in the quarantined
+`src/opencl/ktgmc/kernels/ktgmc_degrain_rig.cl` (`// RIG-VERIFY`). They emit
+the flat per-block offset/weight arrays `kt_degrain_patch` consumes; their
+arithmetic is pinned by `python/run_mv_prepare.py`, and the two host-visible
+encodings (offset 0 + weight 0 for an unusable reference, `-1` sentinels on
+scene change) are specified in `docs/MV_PORT_SPEC.md` §6.3.
 
 `kt_most_freq_mv` IS ported but carries a **RIG-VERIFY** marker: it returns the
 smallest most-frequent component. This is bit-exact vs CUDA whenever the mode is
@@ -132,7 +142,12 @@ mode, in which case CUDA's pick is an artifact of its 1024-thread reduction tree
 
 ## 6. Risks / open questions to resolve on rig
 
-1. `int2`/`int3` host buffer layout (see §2) — run the size probe first.
+1. ~~`int2`/`int3` host buffer layout~~ — **RESOLVED by source archaeology**,
+   not by a probe: upstream's `vectors` is `short2*` (4 B/entry) and `VECTOR`
+   is a packed 12-byte `{int x,y,sad}`, whereas OpenCL `int2`/`int3` are 8 and
+   16. Both were wrong in the port and are fixed; `docs/BLOCKSEARCH_MODEL.md`
+   §8a has the evidence. Treat every 3-component buffer here as a packed
+   triple, and take the types in §2 as the ABI contract.
 2. `kt_copy_pad`/`kt_pad_frame_*` use group-id/local-id launch idioms that must
    be replicated with the exact grid in §3; they are RIG-VERIFY for this reason.
 3. `kt_plane_sad` intentionally preserves 32-bit integer SAD overflow.

@@ -160,6 +160,10 @@ Everything else in this file is documentary. In particular the
 6. Vector-load widening (§4) only if bandwidth-bound, lane-identical only.
 
 ---
+*(Inventory has grown since this pass — NNEDI3, masktools and the MV
+prepare pair were added afterwards; the findings below still hold for the
+kernels they name, but the counts are a snapshot.)*
+
 *Pass conducted 2026-09-24: 18 files / 154 kernels inventoried
 (`grep ^kernel/__kernel`), local-id users enumerated (§1), atomics ranked
 (§3). No `.cl` semantics changed.*

@@ -48,6 +48,7 @@ test: ref lint
 	python3 python/run_masktools_lut.py
 	python3 python/run_mv_calc_all_sad.py
 	python3 python/run_mv_prepare.py
+	python3 lint/audit_inventory.py
 
 clean:
 	rm -rf build

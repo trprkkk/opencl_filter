@@ -20,11 +20,14 @@ findings a rig must act on, and the order to do things in.
 
 ## 0. TL;DR
 
-- **166 OpenCL kernels** across 5 families: avscuda 43, kfm 63, ktgmc 48,
+- **168 OpenCL kernels** across 5 families: avscuda 43, kfm 63, ktgmc 50,
   masktools 6, nnedi3 6.
-- **31 verification runners** (`python/run_*.py`) + **31 CPU mirrors**
-  (`sim/*.cpp`) wired into `make test`. Current state: **32 PASS, 0 FAIL**;
-  `./lint/lint_opencl.sh` → **44 checks, 0 failures**.
+- **32 verification runners** (`python/run_*.py`) + **32 CPU mirrors**
+  (`sim/*.cpp`) wired into `make test`. Current state: **33 PASS, 0 FAIL**;
+  `./lint/lint_opencl.sh` → **46 checks, 0 failures**.
+- These numbers are re-checked automatically by `lint/audit_inventory.py`
+  (part of `make test`), so if this section ever disagrees with the tree the
+  build fails rather than quietly misleading you.
 - Nothing in the repo has ever run on a real device. `make test` proves
   *algorithm* bit-exactness against independent goldens; it cannot prove
   the OpenCL C compiles on a vendor compiler, the launch geometry, or the
@@ -138,6 +141,14 @@ the required size needs a re-decomposition, which invalidates the
 bit-exactness argument for the reductions and must come back through the
 mirror+golden process.
 
+### 2.5 Two families are complete — they are the cheapest first targets
+
+masktools (5/5) and NNEDI3 (6/6) are fully ported and fully verified.
+masktools in particular is five elementwise kernels with no local memory,
+no reductions and no floating point: **bring the rig up on masktools
+first**. If that does not match CUDA, the problem is your harness, not the
+ports.
+
 ### 2.6 Quarantined provisional kernels (`*_rig.cl`) — 6 kernels
 
 Faithful transcriptions kept OUT of the verified files. None may be moved
@@ -161,13 +172,19 @@ Two encodings need host cooperation — offset 0 + weight 0 for an unusable
 reference, and `-1` sentinels on scene change. `MV_PORT_SPEC` §6.3 explains
 both and why they are output-equivalent.
 
-### 2.5 Two families are complete — they are the cheapest first targets
+### 2.7 Definition of done, per verification state
 
-masktools (5/5) and NNEDI3 (6/6) are fully ported and fully verified.
-masktools in particular is five elementwise kernels with no local memory,
-no reductions and no floating point: **bring the rig up on masktools
-first**. If that does not match CUDA, the problem is your harness, not the
-ports.
+| Marker | Means | To close it you must |
+|---|---|---|
+| `// ALG-VERIFIED` | arithmetic proven bit-exact in-sandbox vs an independent golden | nothing algorithmic — only confirm it compiles, launches with the documented geometry, and reads the documented buffer ABI |
+| `// RIG-VERIFY` | faithful transcription; some *external* fact is unconfirmed (host geometry, a fold, a tie-break, a device run) | confirm that specific fact against CUDA, then either graduate the kernel or record the divergence |
+| `// RIG-COMPARED` | terminal state for kernels whose output is device-defined (float reduction order) | show agreement within the stated tolerance on the target device; bit-exactness is not achievable and must not be claimed |
+
+A kernel graduates from `RIG-VERIFY` to `ALG-VERIFIED` only by adding both a
+CPU mirror and an independent golden and passing them in `make test` — not by
+a successful device run alone. A device run closes the *external* fact; the
+mirror+golden pair closes the *arithmetic*. Several kernels in this repo have
+one without the other, which is exactly why the two markers are separate.
 
 ## 3. Suggested order
 
@@ -215,7 +232,27 @@ stay unported rather than guessed — a wrong predictor layout produces
 plausible-but-wrong motion vectors, which is the worst failure mode in this
 repo.
 
-## 5. Ground truth and reproduction
+## 5. Verification index — which runner covers what
+
+Every `ALG-VERIFIED` kernel is covered by one of these. Run any single one
+directly (`python3 python/run_X.py`); they are independent and hermetic.
+
+| Area | Runner | Mirror |
+|---|---|---|
+| NNEDI3 pad/copy | `run_nnedi3_pad.py` | `sim/nnedi3_pad_ref.cpp` |
+| NNEDI3 prescreener | `run_nnedi3_prescreen.py` | `sim/nnedi3_prescreen_ref.cpp` |
+| NNEDI3 predictor net | `run_nnedi3_compute.py` | `sim/nnedi3_compute_ref.cpp` |
+| masktools fill/copy/LUT | `run_masktools_lut.py` | `sim/masktools_lut_ref.cpp` |
+| MV per-block SAD | `run_mv_calc_all_sad.py` | `sim/mv_calc_all_sad_ref.cpp` |
+| MV prepare pair (pin only) | `run_mv_prepare.py` | `sim/mv_prepare_ref.cpp` |
+| KDeblock aux (incl. sharpen pin) | `run_kfm_deblock_aux.py` | `sim/kfm_deblock_aux_ref.cpp` |
+| inventory/doc consistency | `lint/audit_inventory.py` | — |
+
+The remaining runners cover the AvsCUDA, KFM and KTGMC batches; `make test`
+runs all 32 plus the audit. `ls python/run_*.py` is the authoritative list,
+and the audit fails if any runner is not wired in.
+
+## 6. Ground truth and reproduction
 
 - Upstream: `rigaya/AviSynthCUDAFilters` @ `68aef6e`, submodules
   `rigaya/NNEDI3` @ `01931aa` and `rigaya/masktools` @ `24ba826`. KFM
@@ -223,14 +260,14 @@ repo.
 - `third_party/grunt/` is vendored **verbatim** (not ported — GRunT has no
   CUDA). It has only ever been parse-checked, never compiled or linked;
   its README records the sha256s and the `AVISYNTH_SDK` build recipe.
-- Sandbox reproduction: `make test` (all 31 runners) and
-  `./lint/lint_opencl.sh`. Both are fast (~90 s and ~1 s) and hermetic —
+- Sandbox reproduction: `make test` (all 32 runners + the inventory audit)
+  and `./lint/lint_opencl.sh`. Both are fast (~100 s and ~1 s) and hermetic —
   no network, no GPU.
 
-## 6. House rules for anyone continuing
+## 7. House rules for anyone continuing
 
 - A kernel graduates only with **both** a CPU mirror and an *independent*
-  Python golden. "Independent" means derived from the upstream semantics by
+  Python golden (see §2.7). "Independent" means derived from the upstream semantics by
   a different route, not a transcription of the port — several real bugs in
   this repo were caught precisely because the two disagreed.
 - **Mutation-test the proof, not just the port.** The NNEDI3 predictor work
@@ -241,3 +278,18 @@ repo.
 - Equivalent mutants are fine, but **prove** equivalence and write it down
   (e.g. the `dev_expf` bias ±1 is below the f32 step at that magnitude).
 - Upstream defects get transcribed and pinned, never silently corrected.
+- Keep the docs machine-checked. `lint/audit_inventory.py` verifies the
+  counts in §0, the runner/mirror wiring, and that no quarantined kernel
+  claims `ALG-VERIFIED` for itself. Extend it rather than trusting prose:
+  this session found a family summary table reading "not started" for a
+  family that its own document later described as complete.
+
+## 8. Known-stale-by-design notes
+
+- `docs/PERF_NOTES.md` is a dated snapshot (154 kernels at the time). Its
+  findings still apply to the kernels it names; its totals do not.
+- `docs/CODEX_HANDOFF.md` predates this document and covers the MV remainder
+  specifically. Where they disagree on status, this document and
+  `docs/BLOCKSEARCH_MODEL.md` §8a/§8b are newer.
+- `third_party/grunt/` has never been compiled (no Windows/AviSynth SDK
+  here); its README states exactly what was and was not checked.

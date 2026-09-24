@@ -18,9 +18,11 @@ buffers and dispatches them, with a scalar CPU reference used for validation.
 | Project | What it is | Port status here |
 |---|---|---|
 | **KTGMC** | QTGMC-style deinterlacer (motion compensated) | In progress — **Milestone 1 done** (see below) |
-| KNNEDI3 | NNEDI3 neural-net upscaler | not started (next candidate) |
+| KNNEDI3 | NNEDI3 neural-net upscaler | **complete — all 6 device kernels ALG-VERIFIED** (`src/opencl/nnedi3/`, `docs/NNEDI3_PORT_SPEC.md`) |
 | KFM | filter family (KDeband, Deblock, CombingAnalyze, …) | **KDeband/KEdgeLevel/KTemporalNR + MergeStatic/KAnalyzeStatic/KNoiseClip + KDeblock done** (core/qp-table/show/max/scale/sharpen-coeff/merge ALG-VERIFIED; sharpen-pair in provisional `kfm_deblock_rig.cl`, `// RIG-VERIFY`) (`src/opencl/kfm/kernels/`) |
-| AvsCUDA / GRunT / masktools | CUDA-aware dispatch + helpers | out of scope unless requested |
+| masktools | mask/LUT helper suite | **complete — all 5 CUDA kernels ALG-VERIFIED** (`src/opencl/masktools/`, `docs/MASKTOOLS_PORT_SPEC.md`) |
+| AvsCUDA | CUDA-aware dispatch + helpers | ported (18/18 families); 2 float reductions are rig-only (`docs/AVSCUDA_PORT_SPEC.md`) |
+| GRunT | AviSynth runtime helper | **no CUDA to port** — vendored verbatim at `third_party/grunt/` |
 
 A faithful KTGMC port is large: `KTGMC/Kernel.cu` (~3,560 lines) + `MVKernel.cu`
 (~3,540) + `MV.cpp` (~5,550) implement the whole QTGMC algorithm including

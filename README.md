@@ -72,6 +72,7 @@ full kernel-by-kernel roadmap and how to extend the set.
 ```
 docs/PORT_PLAN.md              # port strategy + per-kernel roadmap + licensing
 docs/RIG_HANDOFF_BRINGUP.md    # ** START HERE for rig work ** repo-wide bring-up handoff
+docs/HANDOFF_PROMPT.md         # copy-paste prompt for handing this repo to the next agent
 docs/MV_PORT_SPEC.md           # motion-engine data model + kernel inventory + rig test plan
 docs/HOST_CONTRACT.md          # on-rig OpenCL host runner spec (builds, grids, buffer layout)
 docs/BLOCKSEARCH_MODEL.md      # KTGMC block-search host model (SearchBatch, super-frame, CPU_EMU)

@@ -32,6 +32,13 @@
  * docs.  When this file becomes empty, delete it.
  * ==========================================================================*/
 
+/* Device-verified (rig/dev_kfm_deblock.py, rig/diag_fma_deblock.py): default
+ * driver builds contract mul+add into FMA and drift the sharpen result by
+ * +/-1 vs the per-operation float32 golden; with this pragma the device
+ * matches the golden bit-exact on the reproduced boundary cases (both PX
+ * instantiations).  Same policy as kfm_deblock.cl. */
+#pragma OPENCL FP_CONTRACT OFF
+
 #ifndef PX
 #error "compile with -DPX=uchar|-DPX=ushort and -DPX_MAX=255|65535"
 #endif

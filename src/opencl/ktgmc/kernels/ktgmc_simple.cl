@@ -663,7 +663,7 @@ kernel void kt_vertical_wiener(
 {
     int x = get_global_id(0);
     int y = get_global_id(1);
-    if (x < width) {
+    if (x < width && y < height) {
         if (y < 2) {
             dst[x + y * dst_pitch] = (PX)((src[x + y * src_pitch] +
                                            src[x + (y + 1) * src_pitch] + 1) >> 1);
@@ -696,7 +696,7 @@ kernel void kt_horizontal_wiener(
 {
     int x = get_global_id(0);
     int y = get_global_id(1);
-    if (y < height) {
+    if (y < height && x < width) {
         if (x < 2) {
             dst[x + y * dst_pitch] = (PX)((src[x + y * src_pitch] +
                                            src[(x + 1) + y * src_pitch] + 1) >> 1);

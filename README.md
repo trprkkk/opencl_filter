@@ -120,13 +120,15 @@ Makefile                       # make test  (no OpenCL required)
   MVKernel.cu, which also exposed two ABI bugs in the port (`vectors` is
   `short2`, not `int2`; `out` is a packed 12-byte `VECTOR`, not `int3`) —
   see `docs/BLOCKSEARCH_MODEL.md` §8a.
-  `kt_prepare_degrain` / `kt_prepare_compensate` are ported **provisionally**
-  in the quarantined `ktgmc_degrain_rig.cl` (`// RIG-VERIFY`): they produce
+  `kt_prepare_degrain` / `kt_prepare_compensate` are ported in
+  `ktgmc_motion.cl` (`// RIG-VERIFY`; graduated 2026-10-28 from the deleted
+  quarantine `ktgmc_degrain_rig.cl`, byte-identical): they produce
   the flat per-block offset/weight arrays that the ALG-VERIFIED
   `kt_degrain_patch` consumes, closing the `docs/MV_PORT_SPEC.md` §6.2 seam,
   with their arithmetic pinned by `python/run_mv_prepare.py` (240 cases).
   **RIG-VERIFY** (device run pending): frame padding / mirror copy,
-  `kt_most_freq_mv` (smallest-mode seed), and the block-search pure helpers.
+  and the block-search pure helpers; `kt_most_freq_mv` is **ALG-VERIFIED**
+  (staged-fold tie-break, CUDA-twin 239/239 tie axes — `rig/cuda_mv_tie_test.py`).
   The remaining search / degrain-block /
   compensate kernels need the MV.cpp host state machine + super-frame sub-pel
   layout (see `docs/MV_PORT_SPEC.md`, `docs/CODEX_HANDOFF.md`).

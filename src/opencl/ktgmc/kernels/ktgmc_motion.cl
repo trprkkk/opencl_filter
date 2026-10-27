@@ -17,8 +17,18 @@
  * SUPER, rig/dev_ktgmc_motion.py — 31 checks / 874 cases, both PX): every
  * kernel below, the 12-byte VECTOR / short2 buffer ABI, the calc_all_sad
  * group-grid/bid work-list semantics, and the RIG-VERIFY items annotated
- * "device-confirmed" below.  CUDA-side comparisons called out in those
- * markers remain open (no CUDA toolkit on the rig).
+ * "device-confirmed" below.
+ *
+ * CUDA-twin record (2026-10-28 second rig pass, CUDA toolkit present):
+ *   - kt_prepare_degrain / kt_prepare_compensate GRADUATED in from the
+ *     (now deleted) ktgmc_degrain_rig.cl — code byte-identical — after the
+ *     CUDA twin confirmed the §6.1 block geometry (8526/8526 block
+ *     comparisons, rig/cuda_mv_prepare_test.py) and the device run pinned
+ *     the seam encodings (see their per-kernel comments).
+ *   - kt_most_freq_mv's tie-break was reworked 2026-10-28 to the exact
+ *     staged-fold rule upstream CUDA exhibits (previously the port used a
+ *     port-side "smallest mode" rule that diverged on 93/239 tie cases;
+ *     the new rule is validated 239/239 vs CUDA — see the M18 comment).
  *
  * Plane conventions follow the original: PX sample type, element pitch
  * (= plane row stride in samples).  For 8-bit the CUDA code used packed
@@ -29,6 +39,13 @@
 #ifndef PX
 #error "compile with -DPX=uchar|-DPX=ushort and -DPX_MAX=255|65535"
 #endif
+
+/* The float degrain-weight helpers below (kt_degrain_weight and the graduated
+ * kd_degrain_weight twin) are pinned by mirrors built -ffp-contract=off and by
+ * CUDA-twin device comparisons; pin FP_CONTRACT OFF like kfm_deblock.cl (the
+ * 4936884 pattern) so a default-FMA compiler cannot fuse the
+ * 256.0f*(a-b)/(a+b) expression and drift the pinned integer results. */
+#pragma OPENCL FP_CONTRACT OFF
 
 /* ---------------------------------------------------------------------------
  * M1. kl_copy_pad — mirror-copy a width×height interior plane into a padded
@@ -631,28 +648,51 @@ kernel void kt_init_const_vec(
  *      builds a shared histogram of component value (comp+4096) over 8192 bins
  *      and returns a maximally-counted component.
  *
- *      TIE-BREAK / RIG-VERIFY: when the global-max count M is unique the result
- *      is the single most-frequent value (all sensible rules agree and this is
- *      bit-identical to CUDA).  When several values tie at M, the CUDA winner is
- *      an artifact of its 1024-thread reduction tree (per-thread residue scan +
- *      dev_reduce2 tie "lower tid"), which we found is NOT reducible to a simple
- *      min/max rule.  The port below therefore returns the SMALLEST value among
- *      the modes - a deterministic, intent-faithful choice - and is marked
- *      RIG-VERIFY: the tie case must be reconciled against the CUDA build on a
- *      real rig if bit-exact tie output is ever required (docs/MV_PORT_SPEC.md
- *      §7).  OpenCL device note 2026-10-28 (rig/dev_ktgmc_motion.py): the
- *      OpenCL device AGREES with this pinned CPU tie-break in all 12 tie-
- *      bearing cases run — that closes only the OpenCL side; the CUDA
- *      reconciliation itself is still open (no CUDA toolkit on the rig).
- *      In practice the seed is then refined by kl_mean_global_mv, so a
- *      different equal-frequency mode rarely changes the final output.
+ *      TIE-BREAK (upstream-faithful since 2026-10-28).  When the global-max
+ *      count M is unique the result is the single most-frequent value — every
+ *      sensible rule agrees.  When several values tie at M, upstream CUDA's
+ *      winner is a deterministic artifact of its staged reduction fold
+ *      (MVKernel.cu:1368-1427 kl_most_freq_mv at 1024 threads +
+ *      ReduceKernel.cuh MaxIndexReducer / dev_reduce2 / dev_reduce2_warp,
+ *      upstream @ 68aef6e):
  *
- *      Pure per-row serial scan, O(nVec^2); no work-group / histogram buffer
- *      needed (once-per-level seed; a two-pass histogram may optimize later but
- *      must keep this documented tie-break).
- *      // RIG-VERIFY (tie-break vs CUDA: OpenCL device agrees with the pinned
- *      // tie-break — 2026-10-28, rig/dev_ktgmc_motion.py, 12 cases; CUDA
- *      // reconciliation still open)
+ *        1. per-thread pre-scan at stride 1024 over the 8192-bin histogram
+ *           (MVKernel.cu:1406-1413): each thread keeps the FIRST
+ *           strictly-greater bin among its 8 bins (zero-count threads keep
+ *           the synthetic entry (count 0, bin 0));
+ *        2. shared-memory up-sweep folds at strides 512, 256, 128, 64, 32,
+ *           then in-warp folds at 16, 8, 4, 2, 1;
+ *        3. MaxIndexReducer compares with STRICT `>` and keeps the
+ *           accumulator, i.e. in every fold the EARLIER element in fold
+ *           order wins ties.
+ *
+ *      This exact staged fold was validated on the rig against the verbatim
+ *      upstream CUDA kernel: 239/239 tie cases (rig/cuda_mv_tie_test.py,
+ *      tree_rule()).  The port previously used a port-side "smallest value
+ *      among the modes" rule (never claimed to be CUDA's); it diverged from
+ *      CUDA on 93/239 tie cases and was replaced by the fold below per the
+ *      repo rule that upstream behaviour is transcribed and pinned, never
+ *      silently corrected.  Unique-mode behaviour was already bit-exact.
+ *
+ *      Transcription shape: this port's kt_most_freq_mv is a once-per-level
+ *      one-work-item-per-row seed (grid (1, nRows)), so the fold is
+ *      transcribed serially with the same element order and the same
+ *      strict-`>` reducer — per-thread entries k[t] (count, bin) are built
+ *      exactly as the 1024 CUDA threads build them, then folded at the same
+ *      strides in the same order (the shared-memory 512..32 and the warp
+ *      16..1 stages use the identical MaxIndexReducer, so they are written
+ *      as the two stride loops below).  Bin count of comp is computed by a
+ *      linear pass over the row (no histogram buffer); components are short
+ *      upstream, so every reachable comp lies in [-4096, 4095] — values
+ *      outside that range have no bin and are ignored (upstream would index
+ *      out of bounds; the histogram is comp+4096 over 8192 bins).
+ *
+ *      // ALG-VERIFIED (tie-break): mirror sim/ktgmc_weight_ref.cpp "f" mode
+ *      // + independent Python golden in python/run_motion_core.py (the
+ *      // golden implements the staged fold independently from the CUDA twin
+ *      // evidence, tree_rule() 239/239 vs CUDA @ 68aef6e).  OpenCL device
+ *      // run PASS incl. tie-heavy cases (rig/dev_ktgmc_motion.py S14,
+ *      // 2026-10-28, both PX; CUDA-exact on all tie axes).
  * -------------------------------------------------------------------------*/
 kernel void kt_most_freq_mv(
     __global const int2* __restrict vectors, int vectorsPitch,
@@ -663,21 +703,55 @@ kernel void kt_most_freq_mv(
     int row = (int)get_global_id(1);
     __global const int2* base = vectors + (size_t)row * vectorsPitch;
 
-    int bestCnt = 0;
-    int bestVal = 0x7fffffff;
-
-    for (int i = 0; i < nVec; i++) {
-        int vi = isY ? base[i].y : base[i].x;
-        int cnt = 0;
-        for (int j = 0; j < nVec; j++) {
-            int vj = isY ? base[j].y : base[j].x;
-            if (vj == vi) cnt++;
+    /* Per-thread pre-scan entries (MVKernel.cu:1406-1413): k[t] = (count,
+     * bin) for thread t, first strictly-greater bin among t + i*1024,
+     * i in 0..7 (8192 bins).  Bin count is computed with a linear scan of
+     * the row (this kernel runs once per level per row; the CUDA original
+     * amortises the histogram over 1024 shared-memory threads). */
+    int kcnt[1024];
+    int kbin[1024];
+    for (int t = 0; t < 1024; t++) {
+        int maxc = 0;
+        int idx = 0;
+        for (int i = 0; i < 8; i++) {
+            int b = t + i * 1024;
+            int c = 0;
+            for (int j = 0; j < nVec; j++) {
+                int v = isY ? base[j].y : base[j].x;
+                if (v == b - 4096)
+                    c++;
+            }
+            if (c > maxc) {          /* first strictly-greater wins */
+                maxc = c;
+                idx = b;
+            }
         }
-        if (cnt > bestCnt || (cnt == bestCnt && vi < bestVal)) {
-            bestCnt = cnt;
-            bestVal = vi;
+        kcnt[t] = maxc;
+        kbin[t] = idx;
+    }
+
+    /* Staged up-sweep fold (dev_reduce2): shared-memory strides
+     * 512, 256, 128, 64, 32, then warp folds 16, 8, 4, 2, 1.  The reducer
+     * is MaxIndexReducer's strict `>` — the accumulator (the element earlier
+     * in fold order) wins ties. */
+    for (int s = 512; s >= 32; s >>= 1) {
+        for (int t = 0; t < s; t++) {
+            if (kcnt[t + s] > kcnt[t]) {
+                kcnt[t] = kcnt[t + s];
+                kbin[t] = kbin[t + s];
+            }
         }
     }
+    for (int s = 16; s >= 1; s >>= 1) {
+        for (int t = 0; t < s; t++) {
+            if (kcnt[t + s] > kcnt[t]) {
+                kcnt[t] = kcnt[t + s];
+                kbin[t] = kbin[t + s];
+            }
+        }
+    }
+
+    int bestVal = kbin[0] - 4096;
     if (isY)
         globalMVec[row].y = bestVal;
     else
@@ -1133,4 +1207,258 @@ kernel void kt_overlap_out(
     if (a > PX_MAX) a = PX_MAX;
     if (a < 0) a = 0;
     dst[x + y * dst_pitch] = (PX)a;
+}
+
+/* ============================================================================
+ * M24/M25 — kt_prepare_degrain / kt_prepare_compensate.  GRADUATED 2026-10-28
+ * from the (now deleted) ktgmc_degrain_rig.cl quarantine, code byte-identical
+ * (the kd_* helpers below came along verbatim so the kernel bodies — and the
+ * device-verified rig build they were pinned in — could not drift; kd_* are
+ * exact twins of the ALG-VERIFIED kt_* helpers above, kept under their rig
+ * names).  Graduation evidence, both halves of handoff §2.7:
+ *   - CPU mirror + independent golden: python/run_mv_prepare.py (240 cases,
+ *     8 mutants) vs sim/mv_prepare_ref.cpp — arithmetic pinned in-sandbox.
+ *   - OpenCL device run: rig/dev_ktgmc_motion.py PASS (31 checks / 874 cases,
+ *     both PX) incl. the §6.3 seam encodings (offset-0 + weight-0 unusable
+ *     reference, -1 scene-change sentinels).
+ *   - CUDA twin (upstream @ 68aef6e, rig/cuda_mv_prepare_test.py +
+ *     cuda_mv/cuda_mv_prepare.cu): 81 cases / 8526 block-level comparisons
+ *     agree across verbatim-upstream CUDA, this port, and the MV_PORT_SPEC
+ *     §6.1 block-geometry model — the §6.1 call-site question (blkStep =
+ *     nBlkSize/2, origin nPad + blk*blkStep, 9-window slot via (nBlkX-2)/
+ *     (nBlkY-2) division) is settled; the two §6.3 encoding differences are
+ *     confirmed output-equivalent.  Quarantine rationale resolved.
+ * See docs/MV_PORT_SPEC.md §6.1/§6.3 and docs/RIG_HANDOFF_BRINGUP.md §2.6.
+ * ==========================================================================*/
+#define MV_MAX_DELTA 6
+
+/* dev_get_ref_block's element offset — same function as ktgmc_motion.cl's
+ * kt_ref_block_offset (ALG-VERIFIED there); duplicated so this quarantined
+ * file stays self-contained and can be compiled on its own. */
+static int kd_ref_block_offset(int vx, int vy, int nPitch, int nImgPitch,
+                               int NPEL)
+{
+    if (NPEL == 1)
+        return vx + vy * nPitch;
+    if (NPEL == 2) {
+        int sx = vx & 1;
+        int sy = vy & 1;
+        return (vx >> 1) + (vy >> 1) * nPitch + (sx + sy * 2) * nImgPitch;
+    }
+    {
+        int sx = vx & 3;
+        int sy = vy & 3;
+        return (vx >> 2) + (vy >> 2) * nPitch + (sx + sy * 4) * nImgPitch;
+    }
+}
+
+/* dev_degrain_weight (ALG-VERIFIED twin in ktgmc_motion.cl) */
+static int kd_degrain_weight(int thSAD, int blockSAD)
+{
+    if (thSAD <= blockSAD)
+        return 0;
+    float sq_thSAD    = (float)thSAD * (float)thSAD;
+    float sq_blockSAD = (float)blockSAD * (float)blockSAD;
+    return (int)(256.0f * (sq_thSAD - sq_blockSAD) / (sq_thSAD + sq_blockSAD));
+}
+
+/* dev_norm_weights<N,BINOMIAL> (ALG-VERIFIED twin in ktgmc_motion.cl).
+ * Upstream and ktgmc_motion.cl spell the WSum accumulation and the final
+ * WSrc subtraction as unrolled per-delta chains; these loops are the same
+ * integer additions in a different order, which is exact. */
+static int kd_norm_weights(int delta, int binomial, int* WRefB, int* WRefF)
+{
+    int WSrc = 256;
+    if (binomial) {
+        if (delta == 1) {
+            WSrc *= 2;
+        } else if (delta == 2) {
+            WSrc *= 6;
+            WRefB[0] *= 4; WRefF[0] *= 4;
+        } else if (delta == 3) {
+            WSrc *= 20;
+            WRefB[0] *= 15; WRefF[0] *= 15;
+            WRefB[1] *= 6;  WRefF[1] *= 6;
+        } else if (delta == 4) {
+            WSrc *= 70;
+            WRefB[0] *= 56; WRefF[0] *= 56;
+            WRefB[1] *= 28; WRefF[1] *= 28;
+            WRefB[2] *= 8;  WRefF[2] *= 8;
+        }
+    }
+    int WSum = WSrc + 1;
+    for (int i = 0; i < delta; ++i)
+        WSum += WRefB[i] + WRefF[i];
+    for (int i = 0; i < delta; ++i) {
+        WRefB[i] = WRefB[i] * 256 / WSum;
+        WRefF[i] = WRefF[i] * 256 / WSum;
+    }
+    WSrc = 256;
+    for (int i = 0; i < delta; ++i)
+        WSrc -= WRefB[i] + WRefF[i];
+    return WSrc;
+}
+
+/* The 9-window slot upstream selects with
+ *   wby = ((blky + nBlkY - 3) / (nBlkY - 2)) * 3
+ *   wbx =  (blkx + nBlkX - 3) / (nBlkX - 2)
+ * NOTE these divide by (nBlkX-2)/(nBlkY-2): a 2-block-wide or 2-block-tall
+ * grid divides by zero upstream too.  The port does not paper over it; the
+ * host must not call with nBlkX == 2 or nBlkY == 2. */
+static int kd_win_slot(int blkx, int blky, int nBlkX, int nBlkY)
+{
+    int wby = ((blky + nBlkY - 3) / (nBlkY - 2)) * 3;
+    int wbx =  (blkx + nBlkX - 3) / (nBlkX - 2);
+    return wby + wbx;
+}
+
+/* ---------------------------------------------------------------------------
+ * kt_prepare_degrain — kl_prepare_degrain twin.  Grid 2D (nBlkX, nBlkY).
+ *
+ * Emits, per block blk = blkx + blky*nBlkX (nBlk = nBlkX*nBlkY):
+ *   win_slot[blk]            0..8, the overlap window index
+ *   src_base[blk]            element offset of the block in the src plane
+ *   WSrcArr[blk]             normalised source weight
+ *   WBArr[i*nBlk + blk]      normalised backward weights   (i < delta)
+ *   WFArr[i*nBlk + blk]      normalised forward weights
+ *   refBaseB[i*nBlk + blk]   element offset into ref plane B[i]
+ *   refBaseF[i*nBlk + blk]   element offset into ref plane F[i]
+ * which is exactly the input contract of kt_degrain_patch.
+ *
+ * mvB/mvF are upstream VECTOR arrays: 3 ints per block (x, y, sad), laid out
+ * [i][blk] -> (i*nBlk + blk)*3.  NOT OpenCL int3 (stride 16) — see
+ * docs/BLOCKSEARCH_MODEL.md §8a for why that distinction bit us once already.
+ * // RIG-VERIFY (see file header).
+ * -------------------------------------------------------------------------*/
+kernel void kt_prepare_degrain(
+    int nBlkX, int nBlkY, int nPad, int nBlkSize,
+    int nTh2, int thSAD, int delta, int binomial, int NPEL, int SHIFT,
+    int nPitch, int nPitchSuper, int nImgPitch,
+    __global const int* __restrict sceneChangeB,   /* delta ints */
+    __global const int* __restrict sceneChangeF,   /* delta ints */
+    __global const int* __restrict isUsableB,      /* delta flags */
+    __global const int* __restrict isUsableF,      /* delta flags */
+    __global const int* __restrict mvB,            /* delta*nBlk VECTORs */
+    __global const int* __restrict mvF,
+    __global       int* __restrict win_slot,
+    __global       int* __restrict src_base,
+    __global       int* __restrict WSrcArr,
+    __global       int* __restrict WBArr,
+    __global       int* __restrict WFArr,
+    __global       int* __restrict refBaseB,
+    __global       int* __restrict refBaseF)
+{
+    int blkx = (int)get_global_id(0);
+    int blky = (int)get_global_id(1);
+    if (blkx >= nBlkX || blky >= nBlkY)
+        return;
+
+    int nBlk = nBlkX * nBlkY;
+    int idx = blkx + blky * nBlkX;
+
+    win_slot[idx] = kd_win_slot(blkx, blky, nBlkX, nBlkY);
+
+    int blkStep = nBlkSize / 2;
+    int offx = blkx * blkStep;
+    int offy = blky * blkStep;
+    int offsetS = (nPad + offx) + (nPad + offy) * nPitchSuper;
+    src_base[idx] = offx + offy * nPitch;
+
+    int WRefB[MV_MAX_DELTA], WRefF[MV_MAX_DELTA];
+    for (int i = 0; i < MV_MAX_DELTA; ++i) { WRefB[i] = 0; WRefF[i] = 0; }
+
+    for (int i = 0; i < delta; ++i) {
+        int m = (i * nBlk + idx) * 3;
+
+        int usableB = isUsableB[i] && !(sceneChangeB[i] > nTh2);
+        if (usableB) {
+            refBaseB[i * nBlk + idx] = offsetS
+                + kd_ref_block_offset(mvB[m + 0] >> SHIFT, mvB[m + 1] >> SHIFT,
+                                      nPitchSuper, nImgPitch, NPEL);
+            WRefB[i] = kd_degrain_weight(thSAD, mvB[m + 2]);
+        } else {
+            /* upstream parks the pointer on pSrc; weight 0 makes it unused */
+            refBaseB[i * nBlk + idx] = 0;
+            WRefB[i] = 0;
+        }
+
+        int usableF = isUsableF[i] && !(sceneChangeF[i] > nTh2);
+        if (usableF) {
+            refBaseF[i * nBlk + idx] = offsetS
+                + kd_ref_block_offset(mvF[m + 0] >> SHIFT, mvF[m + 1] >> SHIFT,
+                                      nPitchSuper, nImgPitch, NPEL);
+            WRefF[i] = kd_degrain_weight(thSAD, mvF[m + 2]);
+        } else {
+            refBaseF[i * nBlk + idx] = 0;
+            WRefF[i] = 0;
+        }
+    }
+
+    int WSrc = kd_norm_weights(delta, binomial, WRefB, WRefF);
+
+    WSrcArr[idx] = WSrc;
+    for (int i = 0; i < delta; ++i) {
+        WBArr[i * nBlk + idx] = WRefB[i];
+        WFArr[i * nBlk + idx] = WRefF[i];
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * kt_prepare_compensate — kl_prepare_compensate twin.  Grid 2D (nBlkX,nBlkY).
+ *
+ * Emits per block:
+ *   win_slot[blk]   0..8, or -1 on scene change (upstream: winOver = nullptr)
+ *   ref_base[blk]   element offset, or -1 on scene change
+ *   ref_sel[blk]    1 = the motion plane pRef, 0 = the static plane pRef0,
+ *                   -1 = scene change.  Upstream encodes this by which
+ *                   pointer it stores; the host must pick the plane.
+ *
+ * Note the scaling `mx = (vec.x * time256 / 256) >> SHIFT`: the /256 is a C
+ * integer division that TRUNCATES TOWARD ZERO, while >> SHIFT is an
+ * arithmetic shift that floors.  For negative MVs those differ, so the port
+ * keeps both spellings exactly rather than "simplifying" to one shift.
+ * // RIG-VERIFY (see file header).
+ * -------------------------------------------------------------------------*/
+kernel void kt_prepare_compensate(
+    int nBlkX, int nBlkY, int nPad, int nBlkSize,
+    int nTh2, int time256, int thSAD, int NPEL, int SHIFT,
+    int nPitchSuper, int nImgPitch,
+    __global const int* __restrict sceneChange,    /* single int */
+    __global const int* __restrict mv,             /* nBlk VECTORs */
+    __global       int* __restrict win_slot,
+    __global       int* __restrict ref_base,
+    __global       int* __restrict ref_sel)
+{
+    int blkx = (int)get_global_id(0);
+    int blky = (int)get_global_id(1);
+    if (blkx >= nBlkX || blky >= nBlkY)
+        return;
+
+    int idx = blkx + blky * nBlkX;
+
+    if (sceneChange[0] > nTh2) {
+        win_slot[idx] = -1;
+        ref_base[idx] = -1;
+        ref_sel[idx]  = -1;
+        return;
+    }
+
+    win_slot[idx] = kd_win_slot(blkx, blky, nBlkX, nBlkY);
+
+    int blkStep = nBlkSize / 2;
+    int offsetS = (nPad + blkx * blkStep)
+                + (nPad + blky * blkStep) * nPitchSuper;
+
+    int m = idx * 3;
+    if (mv[m + 2] < thSAD) {
+        int mx = (mv[m + 0] * time256 / 256) >> SHIFT;
+        int my = (mv[m + 1] * time256 / 256) >> SHIFT;
+        ref_base[idx] = offsetS + kd_ref_block_offset(mx, my, nPitchSuper,
+                                                      nImgPitch, NPEL);
+        ref_sel[idx] = 1;
+    } else {
+        ref_base[idx] = offsetS + kd_ref_block_offset(0, 0, nPitchSuper,
+                                                      nImgPitch, NPEL);
+        ref_sel[idx] = 0;
+    }
 }

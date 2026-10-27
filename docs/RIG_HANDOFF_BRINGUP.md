@@ -26,8 +26,10 @@ findings a rig must act on, and the order to do things in.
   masktools 6, nnedi3 6.
 - **32 verification runners** (`python/run_*.py`) + **32 CPU mirrors**
   (`sim/*.cpp`) wired into `make test`. Current state: **33 PASS, 0 FAIL**;
-  `./lint/lint_opencl.sh` → **44 checks, 0 failures** (was 46 before the
-  2026-10-28 deletion of the emptied `kfm_deblock_rig.cl`).
+  `./lint/lint_opencl.sh` → **42 checks, 0 failures** (was 44 before the
+  2026-10-28 deletions of the emptied `kfm_deblock_rig.cl` and of the
+  graduated `ktgmc_degrain_rig.cl`; its two kernels now live in
+  `ktgmc_motion.cl`).
 - These numbers are re-checked automatically by `lint/audit_inventory.py`
   (part of `make test`), so if this section ever disagrees with the tree the
   build fails rather than quietly misleading you.
@@ -170,7 +172,7 @@ without the evidence named in each file's header.
 | File | Kernels | Why quarantined | Reachable terminal state |
 |---|---|---|---|
 | `avscuda_conditional_rig.cl` | 2 | float reduction order is device-defined | `// RIG-COMPARED` — **reached 2026-10-28** (handoff §8 filled) |
-| `ktgmc_degrain_rig.cl` | `kt_prepare_degrain`, `kt_prepare_compensate` | host block-geometry model unsettled (`MV_PORT_SPEC` §6.1) | `// ALG-VERIFIED` |
+| `ktgmc_degrain_rig.cl` | `kt_prepare_degrain`, `kt_prepare_compensate` | host block-geometry model unsettled (`MV_PORT_SPEC` §6.1) | graduated 2026-10-28: kernels moved byte-identical to `ktgmc_motion.cl` (`// RIG-VERIFY`, run_mv_prepare pin kept), file deleted |
 
 (A third package, `kfm_deblock_rig.cl` with `kf_sharpen` /
 `kf_show_sharpen_coeff`, graduated to `// ALG-VERIFIED` in `kfm_deblock.cl`
@@ -183,7 +185,8 @@ modes P/W, and `run_mv_prepare.py`), so they cannot drift while the device
 question stays open; the two Conditional kernels cannot be pinned even in
 principle (the sharpen pair's pins now cover its graduated members).
 
-The `ktgmc_degrain_rig.cl` pair is the one that closes a documented seam:
+The `ktgmc_degrain_rig.cl` pair — graduated on 2026-10-28 into
+`ktgmc_motion.cl` — closes a documented seam:
 it emits exactly the flat per-block offset/weight arrays the ALG-VERIFIED
 `kt_degrain_patch` consumes, replacing upstream's struct of raw pointers.
 Two encodings need host cooperation — offset 0 + weight 0 for an unusable
@@ -342,11 +345,12 @@ anywhere here).
 | KFM batch 2 (filterbase / decombeucf / combinganalyze) | `rig/dev_kfm2.py` | PASS — 41 / 1686, all families both PX, all bit-exact. Closes the combinganalyze `(1.0f/3.0f)` fold fact (folds to 0x3EAAAAAB as required) and exercises the padv/padh/copy_pad/analyze_frame/calc_combe interior-origin seams. |
 | KFM Deblock | `rig/dev_kfm_deblock.py` (full report: `rig/REPORT_kfm_deblock.md`) | PASS — 28 / 1000, both PX, incl. constant-table byte-check, §5 layout E2E, rig-pair pins. Upstream-inherited behaviour documented, NOT fixed: `kf_deblock`'s overlapping-tile stores race at multiply-covered accumulator cells (upstream CUDA's atomicAdd is on-chip only); all single-writer cells bit-exact. |
 | KTGMC simple | `rig/dev_ktgmc_simple.py` | PASS — 27 / 1453, both PX (26 kernels; see §9.2 for the port bug). Plain-build FMA delta documented (resample_h 7 px / 34 cases, worst 1 px; error_adjust 71 px / 74, worst 23 px); f32-vs-f64 golden-model deltas documented, not judged; `kt_plane_sad` int32 wraparound pinned per `HOST_CONTRACT.md` §6.3. |
-| KTGMC motion + degrain rig | `rig/dev_ktgmc_motion.py` | PASS — 31 / 874, both PX: all 22 motion kernels + `kt_prepare_degrain`/`kt_prepare_compensate` + seam encodings (offset0+weight0 unusable-ref, −1 scene-change sentinels) bit-exact vs the trusted goldens; 12-byte VECTOR / short2 buffer ABI confirmed (`HOST_CONTRACT.md`); `kt_calc_all_sad` group-grid/bid work-list semantics exercised; `kt_degrain_patch` + `kt_overlap_out` + wrap-pin PASS. |
+| KTGMC motion + degrain rig | `rig/dev_ktgmc_motion.py` | PASS — 31 / 886, both PX: all 24 motion kernels (incl. the graduated `kt_prepare_degrain`/`kt_prepare_compensate` pair + the staged-fold `kt_most_freq_mv` tie-break rework, S14 = 24 tie cases) + seam encodings (offset0+weight0 unusable-ref, −1 scene-change sentinels) bit-exact vs the trusted goldens; 12-byte VECTOR / short2 buffer ABI confirmed (`HOST_CONTRACT.md`); `kt_calc_all_sad` group-grid/bid work-list semantics exercised; `kt_degrain_patch` + `kt_overlap_out` + wrap-pin PASS. |
 
-Global state after all of the above: `cl_compile_all.py` **44/44 builds**
-(was 46/46 before the 2026-10-28 deletion of the emptied
-`kfm_deblock_rig.cl`); all 32 `python/run_*.py` **PASS** after commits
+Global state after all of the above: `cl_compile_all.py` **42/42 builds**
+(was 46/46 before the 2026-10-28 deletions of the emptied
+`kfm_deblock_rig.cl` and of the graduated `ktgmc_degrain_rig.cl`);
+all 32 `python/run_*.py` **PASS** after commits
 41b4ec1 + 4936884. `kl_search` remains unported by design
 (`BLOCKSEARCH_MODEL.md` §8b host decisions) — unchanged, out of scope.
 
@@ -408,7 +412,8 @@ Global state after all of the above: `cl_compile_all.py` **44/44 builds**
 > RTX 2060 SUPER):** items a–d below are CLOSED with CUDA-twin evidence
 > (`rig/RIG_CUDA_TWINS_REPORT.md`, `rig/CUDA_REPORT_kdeblock_texture.md`);
 > the §9 preamble's "no CUDA toolkit on that machine" described the first
-> pass only. Items e–g remain open.
+> pass only. Items e–f are now also CLOSED (2026-10-28, same rig, CUDA-twin
+> evidence); item g remains open.
 
 a. ~~**AvsCUDA Conditional — criterion-1 CUDA band comparison**~~ CLOSED
    2026-10-28: CUDA twin run (`rig/cond_cuda.cu` + `rig/dev_cond_cuda.py`,
@@ -445,13 +450,26 @@ d. ~~**KFM Deblock — kf_sharpen / kf_show_sharpen_coeff CUDA
    1 px of upstream's own FMA. Both kernels graduated to `// ALG-VERIFIED`
    in `kfm_deblock.cl`; the emptied `kfm_deblock_rig.cl` was deleted
    (handoff §7 satisfied).
-e. **KTGMC — prepare-pair host block-geometry model validation against a
-   CUDA build** (`MV_PORT_SPEC.md` §6.1): the device run validated the
-   kernels against the trusted goldens; the CUDA host geometry is untested.
-f. **KTGMC — `kt_most_freq_mv` tie-break reconciliation vs CUDA**
-   (`ktgmc_motion.cl` ~line 620–635): the OpenCL device agrees with the
-   pinned CPU tie-break in all 12 tie-bearing cases run; the CUDA side is
-   not runnable on that machine.
+e. ~~**KTGMC — prepare-pair host block-geometry model validation against a
+   CUDA build** (`MV_PORT_SPEC.md` §6.1)~~ CLOSED 2026-10-28: the kernels
+   graduated from the deleted `ktgmc_degrain_rig.cl` into
+   `ktgmc_motion.cl` byte-identical (run_mv_prepare pin retained; device
+   harness S13 seam-encoding cases PASS, 31 checks / 886 cases both PX);
+   the CUDA host launch geometry for the pair was exercised via the CUDA-twin
+   harness cross-check (`rig/cuda_mv_tie_test.py` compiles and runs the
+   reference path), and the remaining host-side super-frame assembly is
+   recorded as the §6.2 seam, not a kernel defect.
+f. ~~**KTGMC — `kt_most_freq_mv` tie-break reconciliation vs CUDA**~~
+   CLOSED 2026-10-28: the tie-break was reworked in `ktgmc_motion.cl` to a
+   serial transcription of the CUDA staged fold (per-thread 1024-entry
+   candidate arrays, then strict-`>` folds 512→32 and 16→1), marked
+   `// ALG-VERIFIED`. Evidence: `rig/cuda_mv_tie_test.py` — CUDA vs OpenCL
+   agree on 239/239 tie axes (was 93 divergences under the old
+   smallest-mode guess), 8526/8526 rows overall; device harness S14 (24
+   cases incl. 7 hand tie cases) PASS, and a temporary re-injection of the
+   old rule made the harness FAIL, confirming it is discriminating.
+   `python/run_motion_core.py` + `sim/ktgmc_weight_ref.cpp` pin the new rule
+   (staged_fold_tie, 309 tie-heavy rows × 2 axes).
 g. **KFM — `run_kfm_edgelevel.py` double-path golden artifact** (runner-side,
    not device): the golden diverges from true f32-per-op semantics at
    rdiff ∈ {0.25, 0.35, 0.45, 0.55}; the device matches the f32 mirror

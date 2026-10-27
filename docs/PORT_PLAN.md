@@ -109,11 +109,15 @@ fused twin `kl_RB2B_bilinear_filtered_with_pad` (single 4×4-tap +32/64 pass tha
 also fills the hpad/vpad border, MV.cpp `ReduceToPad`) are both ALG-VERIFIED
 (`run_mv_rb2b.py`, `run_mv_rb2b_pad.py`).
 Source-ported (RIG-VERIFY, device run pending):
-`kl_copy_pad`, `kl_pad_frame_h/v`, `kl_init_scene_change`, `kl_most_freq_mv`
-(smallest-mode; bit-exact vs CUDA except on exact mode ties), the block-search
+`kl_copy_pad`, `kl_pad_frame_h/v`, `kl_init_scene_change`, the block-search
 pure helpers `dev_clip_mv`/`dev_check_mv`/`dev_sq_norm`/`dev_get_ref_block`,
 and the first block-level kernel `kl_calc_all_sad` (per-block SAD vs the
 MV-selected ref block; host model in `docs/BLOCKSEARCH_MODEL.md`).
+`kl_most_freq_mv` is ALG-VERIFIED (staged-fold tie-break transcription,
+CUDA-twin 239/239 tie axes, `rig/cuda_mv_tie_test.py`); the prepare pair
+`kl_prepare_degrain`/`kl_prepare_compensate` graduated from the deleted
+`ktgmc_degrain_rig.cl` into `ktgmc_motion.cl` byte-identical (`// RIG-VERIFY`,
+run_mv_prepare pin retained).
 
 TODO (not yet ported, device-bound — see `docs/CODEX_HANDOFF.md`):
 the block-search driver kernels (`Search`, expanding/hex2, `dev_read_pixels`,

@@ -82,7 +82,7 @@ global size; each kernel also guards `x<… && y<…`.
 | `kt_short_to_byte_or_copy_src` | 2D `(width,height)` | pflag:`const int*`, dst:PX*,`dst_pitch`, src:`const PX*`,`src_pitch`, tmp:`const int*`,`tmp_pitch`,`width,height`,`shift` | pflag[0]!=0→convert, else copy src. |
 | `kt_interpolate_prediction` | 2D `(nDstBlkX,nDstBlkY)` | src_vector:`const int2*`, src_sad:`const int*`, dst_vector:`int2*`, dst_sad:`int*`, `nSrcBlkX,nSrcBlkY,nDstBlkX,nDstBlkY,normFactor,normov,atotal,aodd,aeven` | src/dst buffers hold a single batch's packed blocks (row stride `nSrcBlkX`/`nDstBlkX`). |
 | `kt_mean_global_mv` | 2D `(1, nRows)` | vectors:`const int2*`,`vectorsPitch`,`nVec`, globalMVec:`int2*` | row r at `vectors + r*vectorsPitch`. |
-| `kt_most_freq_mv` | 2D `(1, nRows)` | vectors:`const int2*`,`vectorsPitch`,`nVec`,`isY`, globalMVec:`int2*` | mode seed; RIG-VERIFY tie-break (see §5). |
+| `kt_most_freq_mv` | 2D `(1, nRows)` | vectors:`const int2*`,`vectorsPitch`,`nVec`,`isY`, globalMVec:`int2*` | mode seed; staged-fold tie-break, `// ALG-VERIFIED` (see §5). |
 | `kt_calc_all_sad` | 2D `(nBlkX,nBlkY)` | pSrcY/U/V, pRefY/U/V: PX planes (pointers at the block-grid origin of a padded super-frame; negative MVs read before it), vectors:`const short*` (2 shorts/block, row-major `[bx+by*nBlkX]`, matching upstream `short2*`), dst_sad:`int*`, out:`int*` (3 ints/block = packed 12-byte `VECTOR{x,y,sad}`, NOT `int3`), `nBlkX,nBlkY,nPad,BLK_SIZE,NPEL,chroma,nPitchY,nPitchUV,nImgPitchY,nImgPitchUV` | per-block SAD of src block vs MV-selected ref block (NPEL sub-pel stack). **ALG-VERIFIED** (`python/run_mv_calc_all_sad.py`); layout resolved in `docs/BLOCKSEARCH_MODEL.md` §8a. |
 | `kt_prepare_search` | 2D `(nBlkX,nBlkY)` | scalar block `nBlkX,nBlkY,nBlkSize,nLogScale,nLambdaLevel,lsad,penaltyZero,penaltyGlobal,penaltyNew,nPel,nPad,nBlkSizeOvr,nExtendedWidth,nExtendedHeight`, then vectors:`const int2*`, sads:`const int*`, vectors_copy:`int2*`, dst_data:`int*`(stride 12/blk), dst_dataf:`int*`(stride 5/blk), prog:`int*`, next:`int*` | `dst_data+dst_dataf` replace CUDA `SearchBlock`; `prog` length `nBlkX`, `next` scalar. |
 | `kt_rb2b_bilinear_filtered` | 2D `(nWidth, nHeight)` | src:`const PX*` `src_pitch`, dst:PX* `dst_pitch`, `nWidth`,`nHeight` | 1:2 downsample; src plane is 2·nWidth × 2·nHeight. |
@@ -126,19 +126,24 @@ launch pattern). These additionally require the `MV.cpp` host state machine +
 super-frame sub-pel layout and are out of scope of this bring-up doc (see
 `docs/BLOCKSEARCH_MODEL.md` §8b for the exact remaining items).
 
-The two per-block *prepare* kernels ARE now ported, provisionally, as
-`kt_prepare_degrain` / `kt_prepare_compensate` in the quarantined
-`src/opencl/ktgmc/kernels/ktgmc_degrain_rig.cl` (`// RIG-VERIFY`). They emit
+The two per-block *prepare* kernels ARE ported as
+`kt_prepare_degrain` / `kt_prepare_compensate` in
+`src/opencl/ktgmc/kernels/ktgmc_motion.cl` — graduated on 2026-10-28 from the
+deleted quarantine file `ktgmc_degrain_rig.cl`, byte-identical (`// RIG-VERIFY`).
+They emit
 the flat per-block offset/weight arrays `kt_degrain_patch` consumes; their
 arithmetic is pinned by `python/run_mv_prepare.py`, and the two host-visible
 encodings (offset 0 + weight 0 for an unusable reference, `-1` sentinels on
 scene change) are specified in `docs/MV_PORT_SPEC.md` §6.3.
 
-`kt_most_freq_mv` IS ported but carries a **RIG-VERIFY** marker: it returns the
-smallest most-frequent component. This is bit-exact vs CUDA whenever the mode is
-unique (simulation-confirmed) and only diverges when several values tie for the
-mode, in which case CUDA's pick is an artifact of its 1024-thread reduction tree
-— reconcile on the rig only if bit-exact tie output matters.
+`kt_most_freq_mv` IS ported and now carries an **ALG-VERIFIED** marker
+(2026-10-28): the tie-break is a serial transcription of the CUDA staged fold
+(per-thread 1024-entry candidate arrays, then strict-`>` folds 512→32 and
+16→1), reproducing CUDA's winner exactly even when several values tie for the
+mode. Evidence: `rig/cuda_mv_tie_test.py` — 239/239 tie axes agree (was 93
+divergences under the old smallest-mode guess), 8526/8526 rows overall; the
+rule is pinned by `python/run_motion_core.py` + `sim/ktgmc_weight_ref.cpp`
+(staged_fold_tie).
 
 ## 6. Risks / open questions to resolve on rig
 

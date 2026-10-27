@@ -7,9 +7,13 @@
  *     "w <thSAD> <blockSAD>"            -> print "w <result>"
  *     "n <delta> <binomial> <b0> <f0> ... <bk> <fk>"   (k = delta, so 2*delta ints)
  *        -> print "n <wsrc> <b0> <f0> ... "
+ *     "f <isY> <nVec> <x0> <y0> <x1> <y1> ..."  (nVec (x,y) MV pairs)
+ *        -> print "f <winner>"   (kt_most_freq_mv mode component, the
+ *           staged-fold tie rule; see below)
  */
 #include <cstdio>
 #include <cstdlib>
+#include <vector>
 using namespace std;
 
 static int kt_degrain_weight(int thSAD, int blockSAD){
@@ -50,8 +54,41 @@ static int kt_norm_weights(int delta,int binomial,int*WRefB,int*WRefF){
     return WSrc;
 }
 
+// CPU mirror of kt_most_freq_mv (ktgmc_motion.cl, staged-fold tie rule).
+// Transcription of the OpenCL kernel: per-thread entries (count, bin) over the
+// 8192-bin histogram (comp+4096), first strictly-greater bin per thread at
+// stride 1024, then the staged up-sweep fold at strides 512..32 and 16..1 with
+// the strict-`>` MaxIndexReducer (earlier element in fold order wins ties).
+// The rule itself was validated 239/239 vs verbatim upstream CUDA
+// (rig/cuda_mv_tie_test.py tree_rule, MVKernel.cu:1368-1427 +
+// ReduceKernel.cuh MaxIndexReducer/dev_reduce2).
+static int kt_most_freq_mv(int isY, int nVec, const int* xy){
+    int kcnt[1024], kbin[1024];
+    for(int t=0;t<1024;++t){
+        int maxc=0, idx=0;
+        for(int i=0;i<8;++i){
+            int b=t+i*1024;
+            int c=0;
+            for(int j=0;j<nVec;++j){
+                int v = isY ? xy[2*j+1] : xy[2*j];
+                if(v==b-4096) ++c;
+            }
+            if(c>maxc){ maxc=c; idx=b; }
+        }
+        kcnt[t]=maxc; kbin[t]=idx;
+    }
+    for(int s=512;s>=32;s>>=1)
+        for(int t=0;t<s;++t)
+            if(kcnt[t+s]>kcnt[t]){ kcnt[t]=kcnt[t+s]; kbin[t]=kbin[t+s]; }
+    for(int s=16;s>=1;s>>=1)
+        for(int t=0;t<s;++t)
+            if(kcnt[t+s]>kcnt[t]){ kcnt[t]=kcnt[t+s]; kbin[t]=kbin[t+s]; }
+    return kbin[0]-4096;
+}
+
 int main(){
-    char line[4096];
+    // 65536: the "f" lines carry up to 2*nVec ints (nVec can be 2000 -> ~24 KB)
+    static char line[65536];
     while(fgets(line,sizeof(line),stdin)){
         char t;
         if(line[0]=='w'){ int th,bs; if(sscanf(line,"w %d %d",&th,&bs)==2) printf("w %d\n",kt_degrain_weight(th,bs)); }
@@ -62,6 +99,27 @@ int main(){
             printf("n %d",WSrc);
             for(int i=0;i<d;++i) printf(" %d %d",a[i],a2[i]);
             printf("\n");
+        }
+        else if(line[0]=='f'){
+            // "f <isY> <nVec> <x0> <y0> ..."  (2*nVec ints follow)
+            int isY=0, nVec=0;
+            if(sscanf(line,"f %d %d",&isY,&nVec)==2 && nVec>=0){
+                vector<int> xy(2*(size_t)nVec);
+                const char* p=line + 1;     // step over the leading 'f'
+                char* e;
+                for(int k=0;k<2;++k){       // skip the two header ints (isY,nVec)
+                    strtol(p,&e,10);
+                    if(e==p) break;
+                    p=e;
+                }
+                int got=0;
+                while(got<2*nVec){
+                    long v=strtol(p,&e,10);
+                    if(e==p) break;
+                    p=e; xy[got]=(int)v; ++got;
+                }
+                if(got==2*nVec) printf("f %d\n", kt_most_freq_mv(isY,nVec,xy.data()));
+            }
         }
     }
     return 0;

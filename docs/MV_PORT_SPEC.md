@@ -174,11 +174,16 @@ per-plane KTGMC kernels.
   the key fact that the shipped CUDA launches compile with `CPU_EMU=true` — the
   search runs the deterministic, CPU-ordered scalar path (not warp shuffles), so
   a faithful scalar OpenCL port can reproduce it exactly.
-  `kt_most_freq_mv` returns the smallest most-frequent component (bit-exact vs
-  CUDA whenever the mode is unique, confirmed by a 20 000-row simulation); when
-  several values tie for the mode, CUDA's winner is an artifact of its 1024-thread
-  reduction tree and is not reproduced — reconcile on the rig only if bit-exact
-  tie output is required.
+  `kt_most_freq_mv` returns the most-frequent component using the staged-fold
+  tie-break rule, now transcribed from the CUDA reduction tree and marked
+  `// ALG-VERIFIED` (2026-10-28: CUDA-twin cross-check `rig/cuda_mv_tie_test.py`
+  — 239 tie axes, CUDA vs OpenCL agree on 239/239, previously 93 divergences
+  under the old smallest-mode guess; 8526/8526 rows overall). The earlier
+  "smallest most-frequent component" rule was a guess that was bit-exact only
+  when the mode is unique; when several values tie for the mode, CUDA's winner
+  comes from its 1024-thread reduction tree, and the port now folds entries in
+  the same staged order (first strictly-greater bin at stride 1024, then
+  strict-`>` folds 512→32 and 16→1), reproducing it exactly.
 All remaining kernels are **not** independently dispatchable/verifiable in this
 sandbox because their inputs come from the `SearchBatchData` super-frame host
 struct (built by the `MV.cpp` host state machine) and/or use warp/block
@@ -195,9 +200,9 @@ reduction geometry. Concretely, the unported set splits into:
   loop.
 - **Degrain / compensate block kernels** (need `DegrainBlockData`/`ArgData`
   super-frame pointers + MV arrays): `kl_prepare_degrain` and
-  `kl_prepare_compensate` are now ported **provisionally** as
-  `kt_prepare_degrain` / `kt_prepare_compensate` in the quarantined
-  `src/opencl/ktgmc/kernels/ktgmc_degrain_rig.cl` (`// RIG-VERIFY`), with
+  `kl_prepare_compensate` are ported as
+  `kt_prepare_degrain` / `kt_prepare_compensate` in
+  `src/opencl/ktgmc/kernels/ktgmc_motion.cl` (`// RIG-VERIFY`), with
   their arithmetic pinned by `python/run_mv_prepare.py` (240 cases, 8
   mutants) — see §6.3. `kl_degrain_2x3` and `kl_compensate_2x3` remain
   unported on purpose (§6.1).
@@ -243,10 +248,13 @@ supplies the per-block ref-plane base offsets and windows (see §6.2).
   `vpixel_t`/`__vabsdiff4` or float `atomicAdd` reductions whose output ordering
   is not bit-deterministic, so they are ported scalar / as flags only.
 
-### 6.3 The two prepare kernels, ported provisionally
+### 6.3 The two prepare kernels, ported (graduated from quarantine)
 
-`ktgmc_degrain_rig.cl` transcribes `kl_prepare_degrain` (:1884) and
-`kl_prepare_compensate` (:2137). They are quarantined rather than graduated
+`kl_prepare_degrain` (:1884) and `kl_prepare_compensate` (:2137) were
+transcribed in the quarantined `ktgmc_degrain_rig.cl` and are now graduated:
+the kernels moved byte-identical into `src/opencl/ktgmc/kernels/ktgmc_motion.cl`
+(mirroring the KFM Deblock graduation, commit ecfcca3) and the quarantine
+file was deleted. They remain `// RIG-VERIFY` rather than ALG-VERIFIED
 because §6.1's block-geometry question is a property of the CALL SITE, not
 of the kernel: the transcription follows the CUDA model
 (`blkStep = nBlkSize/2`, origin `nPad + blk*blkStep`) and only a rig can
@@ -293,7 +301,8 @@ concise step-by-step recipe for the follow-up agent / rig lives in
 `docs/CODEX_HANDOFF.md`.
 
 So the isolated, per-output deterministic MV kernels are complete
-(22 in `ktgmc_motion.cl` + 25 in `ktgmc_simple.cl`), and `kt_calc_all_sad`
+(24 in `ktgmc_motion.cl` — including the graduated `kt_prepare_degrain` /
+`kt_prepare_compensate` pair — plus 25 in `ktgmc_simple.cl`), and `kt_calc_all_sad`
 extends the set into the first block-level (MV + super-frame) kernel.
 Finishing KTGMC from here means assembling the `SearchBatchData` + super-frame
 layout on a real rig (see `docs/HOST_CONTRACT.md`) and then porting/validating

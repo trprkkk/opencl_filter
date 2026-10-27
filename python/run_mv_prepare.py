@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""Pin the two PROVISIONAL (// RIG-VERIFY) MV prepare kernels in
-src/opencl/ktgmc/kernels/ktgmc_degrain_rig.cl against the CPU mirror
+"""Pin the two MV prepare kernels (kt_prepare_degrain / kt_prepare_compensate,
+graduated 2026-10-28 into src/opencl/ktgmc/kernels/ktgmc_motion.cl // ALG-VERIFIED;
+formerly the quarantined ktgmc_degrain_rig.cl) against the CPU mirror
 sim/mv_prepare_ref.cpp with an independent Python golden.
 
-These kernels are NOT graduating: docs/MV_PORT_SPEC.md §6.1 leaves the host
-block-geometry model open, so only a rig can say whether the call site uses
-the CUDA model these transcribe.  What this runner does is lock their
-per-block arithmetic so it cannot drift while that stays open — the same
-treatment kf_sharpen/kf_show_sharpen_coeff get in run_kfm_deblock_aux.py.
+Graduation evidence (docs/MV_PORT_SPEC.md §6.1/§6.3): the §6.1 host
+block-geometry question was settled by the CUDA twin
+(rig/cuda_mv_prepare_test.py — 81 cases, 8526/8526 block comparisons agree
+across verbatim-upstream CUDA, this port and the §6.1 model), and the OpenCL
+device run (rig/dev_ktgmc_motion.py) pinned the seam encodings.  This runner
+keeps locking their per-block arithmetic against drift — the same treatment
+kf_sharpen/kf_show_sharpen_coeff get in run_kfm_deblock_aux.py.
 
 Independence: the golden derives the weight normalisation from its
 definition (scale each weight by 256/WSum, then take WSrc as the remainder

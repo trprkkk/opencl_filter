@@ -1,11 +1,13 @@
-/* CPU mirror of the two provisional MV "prepare" kernels in
- * src/opencl/ktgmc/kernels/ktgmc_degrain_rig.cl
+/* CPU mirror of the two MV "prepare" kernels
+ * kt_prepare_degrain / kt_prepare_compensate — graduated 2026-10-28 into
+ * src/opencl/ktgmc/kernels/ktgmc_motion.cl (// ALG-VERIFIED; formerly the
+ * quarantined ktgmc_degrain_rig.cl).
  * (kl_prepare_degrain :1884 / kl_prepare_compensate :2137 twins).
  *
- * These kernels are // RIG-VERIFY: the surrounding host block-geometry model
- * is unsettled (docs/MV_PORT_SPEC.md §6.1).  This mirror + the Python golden
- * pin their per-block ARITHMETIC so it cannot drift while that question is
- * open — the same treatment kf_sharpen gets.
+ * The §6.1 host block-geometry question is settled (CUDA twin:
+ * rig/cuda_mv_prepare_test.py, 8526/8526 block comparisons); this mirror +
+ * the Python golden keep pinning their per-block ARITHMETIC against drift —
+ * the same treatment kf_sharpen gets.
  *
  * Usage: mv_prepare_ref <in> <out>
  *   Modes (all ints on one line):

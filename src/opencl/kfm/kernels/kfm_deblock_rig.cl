@@ -1,13 +1,22 @@
 /* ============================================================================
- * !!! PROVISIONAL — UNVERIFIED — DO NOT SHIP !!!
+ * !!! PROVISIONAL — QUARANTINED — DO NOT SHIP !!!
  *
  * kfm_deblock_rig.cl — KFM `KDeblock`-family kernels that are faithful
- * transcriptions of their CUDA device kernels but have NOT been verified
- * (no CPU mirror, no Python golden, no device run).  Everything in this file
- * is // RIG-VERIFY by definition.  It is deliberately kept OUT of
+ * transcriptions of their CUDA device kernels whose CUDA-texture-precision
+ * question is still open.  Everything in this file
+ * is // RIG-VERIFY by definition.  Status detail (2026-10-28): the
+ * deterministic arithmetic is pinned by a mirror+golden pair
+ * (python/run_kfm_deblock_aux.py modes P/W), and an OpenCL device run against
+ * those goldens PASSED both PX on the rig (rig/dev_kfm_deblock.py, 28 checks
+ * / 1000 cases) including this file's FP_CONTRACT OFF pragma build (commit
+ * 4936884: the as-is build drifted +/-1..2 vs the per-op float32 goldens,
+ * rig/diag_fma_deblock.py) — but the CUDA texture-fetch comparison below /
+ * docs/RIG_HANDOFF_KDEBLOCK.md is the required closer and stays blocked (no
+ * CUDA toolkit on that rig), so the quarantine stands.  The file is
+ * deliberately kept OUT of
  * kfm_deblock.cl (which holds only // ALG-VERIFIED kernels) so that
- * "needs verification" is visible at a glance, and so the file can be handed
- * to another agent/rig for verification as a self-contained unit.
+ * "needs CUDA verification" is visible at a glance, and so the file can be
+ * handed to another agent/rig for verification as a self-contained unit.
  *
  * Contents (all // RIG-VERIFY):
  *   kf_sharpen        kl_sharpen twin (SharpenFilter; texture->manual bilinear)
@@ -90,10 +99,14 @@ static float kf_sharpen_bilinear(
  * // RIG-VERIFY: device-faithful transcription, but the texture fetch is
  * // manual float32 bilinear while CUDA uses HW fixed-point texture filtering
  * // — the two agree structurally yet may differ at float rounding boundaries,
- * // which is unknowable without a device run.  Deterministic behaviour is
- * // pinned by sim/kfm_deblock_aux_ref.cpp + python/run_kfm_deblock_aux.py
- * // (P mode: quirk configs, c==0 identity, float32-exact golden) — the
- * // device comparison (handoff doc recipe) is still required to graduate.
+ * // which is unknowable without a CUDA device run (no CUDA toolkit on the
+ * // 2026-10-28 rig).  OpenCL device run: PASS vs the manual-bilinear golden
+ * // (2026-10-28, rig/dev_kfm_deblock.py, both PX, bit-exact; the upstream
+ * // quirk min(x+1,height-1) proven to bite on device).  Deterministic
+ * // behaviour is pinned by sim/kfm_deblock_aux_ref.cpp +
+ * // python/run_kfm_deblock_aux.py
+ * // (P mode: quirk configs, c==0 identity, float32-exact golden) — the CUDA
+ * // comparison (handoff doc recipe) is still required to graduate.
  * -------------------------------------------------------------------------*/
 kernel void kf_sharpen(
     __global PX* __restrict dst, int width, int height, int pitch,
@@ -146,7 +159,9 @@ kernel void kf_sharpen(
  * // RIG-VERIFY: same texture-precision caveat as kf_sharpen; deterministic
  * // behaviour is pinned by sim/kfm_deblock_aux_ref.cpp (W mode) +
  * // python/run_kfm_deblock_aux.py (ramps, fractional taps, float32-exact
- * // golden) — the device run is still required to close the texture gap.
+ * // golden).  OpenCL device run PASS vs that golden (2026-10-28,
+ * // rig/dev_kfm_deblock.py, both PX; matches the trunc texture emulation
+ * // exactly) — the CUDA run is still required to close the texture gap.
  * -------------------------------------------------------------------------*/
 kernel void kf_show_sharpen_coeff(
     __global PX* __restrict dst, int width, int height, int pitch,

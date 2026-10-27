@@ -44,7 +44,13 @@
  *  - kf_and_coefs is float32 with no FMA contraction.  Upstream's real CUDA
  *    device build may contract `a*b+c` into fma; the mirror/golden here (and a
  *    faithful OpenCL run) keep the exact structure with no contraction, which
- *    can differ by <1 ulp at rounding boundaries — a // RIG-VERIFY item.
+ *    can differ by <1 ulp at rounding boundaries — a // RIG-VERIFY item,
+ *    closed as OUTPUT-INVISIBLE on the rig (2026-10-28, rig/dev_kfm1.py +
+ *    rig/probe_andcoefs_sep.py): over the entire 8-bit input grid (65536
+ *    pairs x 12 threshold combos) fused and unfused float32 models give
+ *    identical outputs after the final int(s*128+0.5), and the device matched
+ *    both models on every tested case.  The CUDA-twin comparison itself
+ *    remains open.
  *    invcombe/invdiff are the host constants 1.0f/thcombe, 1.0f/thdiff.
  * ==========================================================================*/
 

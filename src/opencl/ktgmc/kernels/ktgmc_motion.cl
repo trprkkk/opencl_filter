@@ -13,6 +13,13 @@
  *   // RIG-VERIFY   : faithful source port; a real OpenCL/CUDA-device run is
  *                     still pending (see docs/MV_PORT_SPEC.md §7).
  *
+ * Device record: an OpenCL device run PASSED on 2026-10-28 (NVIDIA RTX 2060
+ * SUPER, rig/dev_ktgmc_motion.py — 31 checks / 874 cases, both PX): every
+ * kernel below, the 12-byte VECTOR / short2 buffer ABI, the calc_all_sad
+ * group-grid/bid work-list semantics, and the RIG-VERIFY items annotated
+ * "device-confirmed" below.  CUDA-side comparisons called out in those
+ * markers remain open (no CUDA toolkit on the rig).
+ *
  * Plane conventions follow the original: PX sample type, element pitch
  * (= plane row stride in samples).  For 8-bit the CUDA code used packed
  * uchar4 accesses only as a load optimization; the scalar addressing below
@@ -31,6 +38,9 @@
  *     the CUDA launcher did.  Out-of-range dst coords are guarded to the
  *     padded extent; source coords are edge-mirrored (reflection, -x-1).
  *     // RIG-VERIFY
+ *     // (device-confirmed 2026-10-28, rig/dev_ktgmc_motion.py: launch +
+ *     //  mirror-pad output bit-exact vs the trusted golden; CUDA twin not
+ *     //  run)
  * -------------------------------------------------------------------------*/
 kernel void kt_copy_pad(
     __global PX* __restrict dst, int dst_pitch,
@@ -62,6 +72,8 @@ kernel void kt_copy_pad(
  *     [hPad+width, hPad+width+hPad) <- interior col hPad+width-1.
  *     Grid must cover x in [0,hPad); launch 2 groups on x (left/right).
  *     // RIG-VERIFY
+ *     // (device-confirmed 2026-10-28, rig/dev_ktgmc_motion.py: bit-exact,
+ *     //  both PX; CUDA twin not run)
  * -------------------------------------------------------------------------*/
 kernel void kt_pad_frame_h(
     __global PX* ptr, int pitch, int hPad, int width, int height)
@@ -86,6 +98,8 @@ kernel void kt_pad_frame_h(
  *     [vPad+height, vPad+height+vPad) <- interior row vPad+height-1.
  *     Launch 2 groups on y (top/bottom).
  *     // RIG-VERIFY
+ *     // (device-confirmed 2026-10-28, rig/dev_ktgmc_motion.py: bit-exact,
+ *     //  both PX, incl. the h+v pad chain; CUDA twin not run)
  * -------------------------------------------------------------------------*/
 kernel void kt_pad_frame_v(
     __global PX* ptr, int pitch, int vPad, int width, int height)
@@ -626,13 +640,19 @@ kernel void kt_init_const_vec(
  *      the modes - a deterministic, intent-faithful choice - and is marked
  *      RIG-VERIFY: the tie case must be reconciled against the CUDA build on a
  *      real rig if bit-exact tie output is ever required (docs/MV_PORT_SPEC.md
- *      §7).  In practice the seed is then refined by kl_mean_global_mv, so a
+ *      §7).  OpenCL device note 2026-10-28 (rig/dev_ktgmc_motion.py): the
+ *      OpenCL device AGREES with this pinned CPU tie-break in all 12 tie-
+ *      bearing cases run — that closes only the OpenCL side; the CUDA
+ *      reconciliation itself is still open (no CUDA toolkit on the rig).
+ *      In practice the seed is then refined by kl_mean_global_mv, so a
  *      different equal-frequency mode rarely changes the final output.
  *
  *      Pure per-row serial scan, O(nVec^2); no work-group / histogram buffer
  *      needed (once-per-level seed; a two-pass histogram may optimize later but
  *      must keep this documented tie-break).
- *      // RIG-VERIFY (tie-break vs CUDA pending on-rig reconciliation)
+ *      // RIG-VERIFY (tie-break vs CUDA: OpenCL device agrees with the pinned
+ *      // tie-break — 2026-10-28, rig/dev_ktgmc_motion.py, 12 cases; CUDA
+ *      // reconciliation still open)
  * -------------------------------------------------------------------------*/
 kernel void kt_most_freq_mv(
     __global const int2* __restrict vectors, int vectorsPitch,
@@ -820,7 +840,10 @@ kernel void kt_rb2b_bilinear_filtered_with_pad(
  * dev_sq_norm / dev_get_ref_block). Pure integer functions shared by the
  * block-search / degrain / compensate kernels (see docs/BLOCKSEARCH_MODEL.md).
  * Not dispatched on their own; RIG-VERIFY until exercised by a block kernel on
- * a rig.
+ * a rig.  Device note 2026-10-28 (rig/dev_ktgmc_motion.py): kt_ref_block_offset
+ * (= dev_get_ref_block) is exercised via kt_degrain_patch and is bit-exact,
+ * both PX; kt_clip_mv / kt_check_mv / kt_sq_norm remain unexercised pending
+ * the kl_search port.
  * -------------------------------------------------------------------------*/
 // Clamp motion vector v to the search rect: x to [rect[2],rect[0]],
 // y to [rect[3],rect[1]].  (rect == SearchBlock.data[0..3] CLIP_RECT.)

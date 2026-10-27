@@ -66,8 +66,11 @@
  * consumes kf_deblock's output directly with tmp_pitch_u4 = acc_pitch_ushort
  * >> 2, tmp_ipitch_rows = bh*8 rows per parity slice, and the tmp base
  * pre-offset by (+8 ushorts, +8 rows) exactly as the CUDA host pre-offsets
- * (+2 ushort4, +8 rows).  This reconciliation is reasoned, not run — it is
- * part of the merge verification handoff (docs/RIG_HANDOFF_KDEBLOCK.md).
+ * (+2 ushort4, +8 rows).  Device-confirmed 2026-10-28 (rig/dev_kfm_deblock.py):
+ * the handoff §5 layout E2E — device accumulator feeding device
+ * kf_merge_deblock vs the packed-quad golden — is bit-exact on the rig, both
+ * PX.  The CUDA-twin comparison for the quarantined sharpen pair remains open
+ * (kfm_deblock_rig.cl / docs/RIG_HANDOFF_KDEBLOCK.md).
  * ==========================================================================*/
 
 /* Device-verified (rig/dev_kfm_deblock.py, rig/diag_fma_deblock.py): default

@@ -54,6 +54,10 @@
  * additionally covered by cl_khr_int64_base_atomics for OpenCL 1.2 devices.
  * // RIG-VERIFY: devices with neither need a per-group-partials + host-sum
  * fallback (not implemented); the single-group test path is unaffected.
+ * // Device-confirmed 2026-10-28 (rig/dev_kfm2.py): 64-bit ulong atomic adds
+ * // work on the rig although cl_khr_int64_base_atomics /
+ * // cl_khr_int64_extended_atomics are absent from its extension string —
+ * // the fallback clause still applies to devices that genuinely lack them.
  *
  * Status: // ALG-VERIFIED (python/run_kfm_decombeucf.py) vs
  *   sim/kfm_decombeucf_ref.cpp.

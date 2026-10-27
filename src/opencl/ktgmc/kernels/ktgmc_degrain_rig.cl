@@ -20,6 +20,16 @@
  * models, and only a rig can say which one a given call site is in.  These
  * kernels transcribe the CUDA side verbatim.
  *
+ * -- Device run status (2026-10-28, rig/dev_ktgmc_motion.py) ----------------
+ * An OpenCL device run PASSED on an NVIDIA RTX 2060 SUPER: both kernels are
+ * bit-exact vs the trusted goldens (both PX, 120 cases each; run_mv_prepare.py
+ * pins the pair), and the §6.2 seam encodings (offset 0 + weight 0 unusable
+ * reference, -1 scene-change sentinels) were exercised and pinned on device.
+ * This closes the OpenCL-side device-run question ONLY.  The quarantine and
+ * the graduation gate below — (a) block-geometry model and (b) the CUDA
+ * comparison, both needing a CUDA build that this rig lacks — remain in
+ * force; the file stays // RIG-VERIFY.
+ *
  * -- Pointers become offsets (the §6.2 seam) --------------------------------
  * Upstream fills a DegrainBlockData / CompensateBlockData struct of raw
  * POINTERS (b.pSrc, b.pB[i], b.pF[i], b.pRef, b.winOver).  OpenCL cannot

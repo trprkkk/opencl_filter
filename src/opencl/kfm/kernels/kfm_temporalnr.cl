@@ -30,6 +30,14 @@
  * `-cl-fp32-correctly-rounded-enabled` (best-effort) and is a // RIG-VERIFY
  * item — the difference is at most a couple of ulp, not an algorithm change.
  *
+ * DEVICE RECORD (2026-10-28, rig/dev_kfm1.py + rig/probe_fdiv2.py, NVIDIA
+ * RTX 2060 SUPER): the "OpenCL `/` mirrors the CPU reference" claim holds
+ * on this driver ONLY with `-cl-fp32-correctly-rounded-divide-sqrt` — the
+ * default build mis-rounds 360/800 probe values (one-ulp), so the f32
+ * division kernels (edgelevel + temporalnr) MUST be built with that flag;
+ * with it the device is bit-exact vs the golden (temporalnr PASS).  A CUDA
+ * comparison against the literal `__fdividef` output remains open.
+ *
  * NOTE on types: pixel_t is uchar/ushort.  count/sum fit in int
  * (count <= nframes = 2*dist+1 <= 33;  sum <= 33*65535), and
  * (float)sum/count lands back in [0,maxv] so no explicit clamp is needed

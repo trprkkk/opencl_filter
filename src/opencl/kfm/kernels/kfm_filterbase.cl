@@ -61,15 +61,21 @@
  *    rig-bound on the padded plane; the arithmetic is verified over the
  *    interior (rows 2..height-3) here.  The host pad layout / offset is a
  *    RIG-VERIFY seam (the calc_combe launch geometry over the padded buffer is
- *    host glue, as with KEdgeLevel's el_to444 host sizing).
+ *    host glue, as with KEdgeLevel's el_to444 host sizing) — device-exercised
+ *    2026-10-28 (rig/dev_kfm2.py): interior-origin launches bit-exact on the
+ *    rig device.
  *  - analyze_frame likewise reads source rows y-1/y+1 unguarded from
  *    VPAD-padded planes (interior-origin pointers; the host pad layout/offset
- *    is a RIG-VERIFY seam as with padv/padh) — but its border outputs are
- *    defined by the pad, so all height rows are verified with padded inputs.
+ *    is a RIG-VERIFY seam as with padv/padh — device-exercised 2026-10-28,
+ *    rig/dev_kfm2.py: interior-origin launches bit-exact) — but its border
+ *    outputs are defined by the pad, so all height rows are verified with
+ *    padded inputs.
  *  - analyze_frame likewise reads source rows y-1/y+1 unguarded from
  *    VPAD-padded planes (interior-origin pointers; the host pad layout/offset
- *    is a RIG-VERIFY seam as with padv/padh) — but its border outputs are
- *    defined by the pad, so all height rows are verified with padded inputs.
+ *    is a RIG-VERIFY seam as with padv/padh — device-exercised 2026-10-28,
+ *    rig/dev_kfm2.py: interior-origin launches bit-exact) — but its border
+ *    outputs are defined by the pad, so all height rows are verified with
+ *    padded inputs.
  *  - calc_combe's output is clamped to [0,255] regardless of pixel bit depth
  *    (upstream casts the clamped int to the pixel type; the coefficient planes
  *    KAnalyzeStatic uses are 0..128-scaled values, so this matches).
@@ -103,7 +109,8 @@ static int kf_calc_combe_val(int a, int b, int c, int d, int e)
  * Combing measure at each pixel from the 5 vertical taps y-2..y+2 of a
  * (host-padded) interlaced frame: combe = CalcCombe(...) >> 2, clamped [0,255].
  * Grid: 2D (width,height).  Interior ALG-VERIFIED; border rows need the padded
- * plane (RIG-VERIFY).
+ * plane (RIG-VERIFY seam — device-exercised 2026-10-28, rig/dev_kfm2.py:
+ * interior-origin launch bit-exact on the rig).
  * -------------------------------------------------------------------------*/
 kernel void kf_calc_combe(
     __global       PX* __restrict dst,
@@ -405,11 +412,12 @@ kernel void kf_copy_border(
  * The taps are lane-independent, so the scalar port is lane-identical to the
  * vector twin.  Sources point at the interior origin of VPAD-mirror-padded
  * planes (rows y-1/y+1 are read unguarded, as upstream); the host-side pad
- * layout/offset is a RIG-VERIFY seam as with kf_padv/kf_padh — but unlike
- * kf_calc_combe, the border outputs are DEFINED by the pad, so all height
- * rows are verified here with padded inputs.  Grid: 2D (width,height);
- * source row stride pitch, flag row stride dstPitch.  // ALG-VERIFIED
- * (integer)
+ * layout/offset is a RIG-VERIFY seam as with kf_padv/kf_padh (device-
+ * exercised 2026-10-28, rig/dev_kfm2.py: interior-origin launch bit-exact)
+ * — but unlike kf_calc_combe, the border outputs are DEFINED by the pad, so
+ * all height rows are verified here with padded inputs.  Grid: 2D
+ * (width,height); source row stride pitch, flag row stride dstPitch.
+ * // ALG-VERIFIED (integer)
  * -------------------------------------------------------------------------*/
 kernel void kf_analyze_frame(
     __global       uchar* __restrict dst, int dstPitch,

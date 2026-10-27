@@ -66,6 +66,19 @@ change silently: swapping the leading clip must not change the 16-bit
 Whether to correct the depth on a rig is a separate, evidence-backed
 decision — flagged, not taken.
 
+**Decision (2026-10-28, after the rig device run): KEEP
+bug-compatibility.** `rig/dev_masktools.py` ran the whole surface on an
+NVIDIA RTX 2060 SUPER (driver-reported OpenCL 3.0, kernels built
+`-cl-std=CL1.2`, both PX widths): 9 checks / 405 cases PASS, and the device
+reproduces the transcribed 16-bit collapse exactly as pinned
+(`lut_xy` depends only on `Y & 255`, `lut_xyz` only on `Z & 255`). This
+confirms that the port's pinned reading of the upstream defect is what a
+real OpenCL device computes — it does **not** confirm the CUDA-twin half of
+RIG_HANDOFF_BRINGUP §2.2 (that the upstream CUDA binary itself produces the
+collapsed output): no CUDA toolkit on that rig, so that item stays open.
+Until it closes: no silent fix — the goldens keep asserting the collapse,
+and the port keeps passing the faithful 8/255 arguments.
+
 The masking is also load-bearing for memory safety: a mutant that removed
 it segfaulted the mirror, because the 16-bit index would otherwise run off
 the 256-entry region the CUDA path actually addresses.

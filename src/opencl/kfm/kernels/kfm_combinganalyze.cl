@@ -22,7 +22,9 @@
  *    documented row offsets; remove_combe2: VPAD frame), so the .cl contract
  *    is halo-padded sources and ALL outputs are verified with padded inputs
  *    (interior-origin pointers are a RIG-VERIFY host seam, as with
- *    kf_padv/kf_analyze_frame).  sum_box3x3's flag-plane halo content is a
+ *    kf_padv/kf_analyze_frame — device-exercised 2026-10-28, rig/dev_kfm2.py:
+ *    interior-origin launches bit-exact on the rig device).
+ *    sum_box3x3's flag-plane halo content is a
  *    host-seam detail — the twins read identical addresses either way.
  *  - bilinear's (x-HALF)>>SHIFT keeps C arithmetic-shift semantics for the
  *    negative top rows/cols (universal on real devices; the mirror and the
@@ -32,8 +34,11 @@
  *    mult/divide round IEEE-correctly on any device — EXCEPT the (1.0f/3.0f)
  *    constant fold, which OpenCL does not guarantee correctly-rounded
  *    (RIG-VERIFY: must fold to 0x3EAAAAAB, as every mainstream compiler
- *    does; else pass k in from the host).  Output depends only on the byte
- *    sum t (all adds exact), so the t = 0..765 sweep is exhaustive.
+ *    does; else pass k in from the host).  Device-confirmed 2026-10-28
+ *    (rig/dev_kfm2.py): the rig's compiler folds it to 0x3EAAAAAB and
+ *    temporal_soften is bit-exact vs the float32 golden.  Output depends
+ *    only on the byte sum t (all adds exact), so the t = 0..765 sweep is
+ *    exhaustive.
  *  - binary_flag runs in-place upstream (dst == srcY) — race-free, as every
  *    lane touches only its own index.  sum_box3x3 ping-pongs through a tmp
  *    frame (never in-place).  contains_durty_block's *work = 1 is an
@@ -229,7 +234,8 @@ kernel void kf_bilinear_v(
  * words).  dst = (int)(((float)s0 + (float)s1 + (float)s2) * (1.0f/3.0f)),
  * truncated toward zero (non-negative: floor), wrapping mod 256 like
  * VHelper::cast_to (always in range in practice).  Float32, no FMA pattern;
- * the (1.0f/3.0f) fold is a RIG-VERIFY item (see header).  Grid: 2D
+ * the (1.0f/3.0f) fold RIG-VERIFY item is device-closed (folded to
+ * 0x3EAAAAAB on the rig; 2026-10-28, rig/dev_kfm2.py — see header).  Grid: 2D
  * (width,height).  // ALG-VERIFIED (float32-exact golden)
  * -------------------------------------------------------------------------*/
 kernel void kf_temporal_soften(

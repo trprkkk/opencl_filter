@@ -298,3 +298,120 @@ and the audit fails if any runner is not wired in.
   `docs/BLOCKSEARCH_MODEL.md` §8a/§8b are newer.
 - `third_party/grunt/` has never been compiled (no Windows/AviSynth SDK
   here); its README states exactly what was and was not checked.
+
+## 9. Rig device-run record (2026-10-27/28, NVIDIA RTX 2060 SUPER)
+
+First device runs of the whole repo, on an NVIDIA GeForce RTX 2060 SUPER
+(driver-reported OpenCL 3.0; every build `-cl-std=CL1.2`, both `-DPX=uchar`
+and `-DPX=ushort` where the file is PX-generic). Harness scripts and final
+logs live in the rig sandbox **outside this repo** (`rig/dev_*.py`,
+`rig/final_*.txt`; device access via a ctypes ICD loader, no pyopencl;
+Python goldens run standalone under Python 3.13). Per §2.7, everything
+below closes *external* facts only — a device run never graduates a kernel
+by itself — and facts defined as "reconcile against the CUDA build" stay
+open (no CUDA toolkit on that machine; no CUDA agreement is claimed
+anywhere here).
+
+### 9.1 Per-family results
+
+| Family / batch | Harness | Result |
+|---|---|---|
+| masktools (§2.5's first target) | `rig/dev_masktools.py` | PASS — 9 checks / 405 cases, both PX. The §2.2 collapsed 16-bit LUT behaviour reproduces exactly as transcribed/pinned. Decision recorded in `MASKTOOLS_PORT_SPEC.md` §3: **keep bug-compatibility**; CUDA-twin confirmation open; no silent fix (goldens assert the collapse). |
+| NNEDI3 | `rig/dev_nnedi3.py` | PASS — 10 / 817, both PX. §2.3 closed with restructured criteria (shipped build: integer outputs bit-exact; harness-only unfused build: bit-exact incl. pre-rounding float bits). §2.4 closed empirically (see §9.4). |
+| AvsCUDA elementwise | `rig/dev_avscuda.py` | PASS — 26 / 3920; 26 kernels bit-exact vs trusted goldens. Documented device-defined equivalences (not weakenings): all f32 NaN results canonicalize to 0x7FFFFFFF (incl. 0*inf); the PX store narrows mod 2^bits like upstream's pixel_t store. Harness validated by 5 injected bugs, all caught. |
+| AvsCUDA Conditional (quarantined) | `rig/dev_avscuda_conditional.py` | Integer family: 15 kernels, 1320/1320 bit-exact (u64 atomics, pitch slack, 4096×4096). Float rig pair: Phase A anchors bit-exact (A1–A10 incl. 1080p exact 0x497d2000, NaN→0x7fffffff, −0.0 checks); Phase B 112 cells, 107/112 within as-written criterion-2, the 5 tight 1080p cells adjudicated via an RM noise model + a host f32 twin of the committed algorithm (100 CAS orders) — device inside the twin envelope on all; Phase C all PASS; `ka_count_histf32` FMA probe bit-exact vs the runner golden. Criterion-1 (CUDA band) stays open → markers remain `// RIG-VERIFY` (§9.5). |
+| KFM batch 1 (deband / edgelevel / temporalnr / mergestatic / noiseclip) | `rig/dev_kfm1.py` | PASS — 11 / 784. `kf_and_coefs` FMA seam provably output-invisible (entire 8-bit input grid: 65536 pairs × 12 combos ≈ 786k cells, fused == unfused after `int(s*128+0.5)`); edgelevel/temporalnr require `-cl-fp32-correctly-rounded-divide-sqrt` (§9.3). |
+| KFM batch 2 (filterbase / decombeucf / combinganalyze) | `rig/dev_kfm2.py` | PASS — 41 / 1686, all families both PX, all bit-exact. Closes the combinganalyze `(1.0f/3.0f)` fold fact (folds to 0x3EAAAAAB as required) and exercises the padv/padh/copy_pad/analyze_frame/calc_combe interior-origin seams. |
+| KFM Deblock | `rig/dev_kfm_deblock.py` (full report: `rig/REPORT_kfm_deblock.md`) | PASS — 28 / 1000, both PX, incl. constant-table byte-check, §5 layout E2E, rig-pair pins. Upstream-inherited behaviour documented, NOT fixed: `kf_deblock`'s overlapping-tile stores race at multiply-covered accumulator cells (upstream CUDA's atomicAdd is on-chip only); all single-writer cells bit-exact. |
+| KTGMC simple | `rig/dev_ktgmc_simple.py` | PASS — 27 / 1453, both PX (26 kernels; see §9.2 for the port bug). Plain-build FMA delta documented (resample_h 7 px / 34 cases, worst 1 px; error_adjust 71 px / 74, worst 23 px); f32-vs-f64 golden-model deltas documented, not judged; `kt_plane_sad` int32 wraparound pinned per `HOST_CONTRACT.md` §6.3. |
+| KTGMC motion + degrain rig | `rig/dev_ktgmc_motion.py` | PASS — 31 / 874, both PX: all 22 motion kernels + `kt_prepare_degrain`/`kt_prepare_compensate` + seam encodings (offset0+weight0 unusable-ref, −1 scene-change sentinels) bit-exact vs the trusted goldens; 12-byte VECTOR / short2 buffer ABI confirmed (`HOST_CONTRACT.md`); `kt_calc_all_sad` group-grid/bid work-list semantics exercised; `kt_degrain_patch` + `kt_overlap_out` + wrap-pin PASS. |
+
+Global state after all of the above: `cl_compile_all.py` **46/46 builds**
+(after every `.cl` change); all 32 `python/run_*.py` **PASS** after commits
+41b4ec1 + 4936884. `kl_search` remains unported by design
+(`BLOCKSEARCH_MODEL.md` §8b host decisions) — unchanged, out of scope.
+
+### 9.2 Genuine port bugs found by the device runs (fixed + committed)
+
+- **41b4ec1 — ktgmc_simple: wiener kernels had 1-D guards.**
+  `kt_vertical_wiener` guarded only `x < width` and `kt_horizontal_wiener`
+  only `y < height`, so padded launches wrote zeros past the plane edge.
+  Both now carry the full 2D guard, matching the other 23 kernels and
+  `HOST_CONTRACT.md` §3 Program A.
+- **4936884 — kfm_deblock.cl + kfm_deblock_rig.cl: FP_CONTRACT OFF pragma.**
+  The as-is build contracted mul+add and drifted ±1..2 vs the per-operation
+  float32 goldens; the pragma build is bit-exact on every reproduced case
+  (A/B evidence: `rig/diag_fma_deblock.py`).
+- Earlier first-contact smoke fixes: **f478d65** — reserved keyword `half`,
+  `__constant` program arrays, harness libm/NaN portability.
+
+### 9.3 Host build-contract facts (this driver — both observations stated plainly)
+
+- `#pragma OPENCL FP_CONTRACT OFF` **is honoured — and required —** for the
+  kfm_deblock, ktgmc_simple and avscuda elementwise programs: default builds
+  contract mul+add into FMA and drift results vs the per-op float32 goldens;
+  pragma builds are bit-exact.
+- **The same driver ignores that pragma for the NNEDI3-style programs** (and
+  ignores `-cl-opt-disable`; `-fmad=false` is rejected — `rig/probe_fma.py`):
+  NVIDIA contracts FMA unconditionally in those builds. Which of the two
+  behaviours a program gets must be established per program, not assumed
+  from either result.
+- `-cl-fp32-correctly-rounded-divide-sqrt` **is required** on the host:
+  default f32 division mis-rounds 360/800 probe values (`rig/probe_fdiv2.py`)
+  — edgelevel/temporalnr and the avscuda `to_float` 1/MAX divisions need it
+  for bit-exactness. It fixes division rounding only; FMA stays contracted
+  under it (§2.3's aside that it is "not what you want" was right about
+  contraction and wrong about division).
+
+### 9.4 Rig-machine quirks (observed on this device/driver only)
+
+- **Work-group queries are unreliable**: `CL_KERNEL_WORK_GROUP_SIZE` returns
+  a constant 256 for every kernel, and
+  `CL_KERNEL_PREFERRED_WORK_GROUP_SIZE_MULTIPLE` errors with −30. The §2.4
+  required work-group sizes (32,16,1)/(16,32,1) were therefore proven
+  empirically — launched in hundreds of cases — with the documented
+  `__local` budgets (2676 B prescreen; 13700 B px1 / 22916 B px2 compute_nn).
+- **cl_mem sub-buffers are unusable for interior origins** on this driver:
+  out-of-bounds/negative accesses through sub-buffer interior origins are
+  silently dropped (`rig/probe_sub*.py`). SVM pointers (`clSVMAlloc` +
+  `clSetKernelArgSVMPointer` with base+offset) work for interior origins.
+  `CL_DEVICE_MEM_BASE_ADDR_ALIGN` = 4096 bits, so 512 B-aligned sub-buffer
+  origins are spec-legal — they just do not behave.
+- **64-bit atomics on ulong work** although cl_khr_int64_base_atomics /
+  cl_khr_int64_extended_atomics are absent from the extension string.
+- **NaN canonicalization**: every f32 NaN result (incl. 0*inf) comes back as
+  0x7FFFFFFF — a device-defined equivalence, documented where it matters,
+  not a tolerance weakening.
+
+### 9.5 Open items after the device pass
+
+a. **AvsCUDA Conditional — criterion-1 CUDA band comparison** (its handoff
+   §5.2-1/§8 appendix): the OpenCL side is fully green (§9.1), but
+   `// RIG-COMPARED` requires the CUDA band; both markers stay
+   `// RIG-VERIFY` and the §8 appendix stays unfilled.
+b. **AvsCUDA Conditional — criterion-2 calibration**: the as-written formula
+   under-covers the algorithm's own f32 counter rounding at 8160 blocks
+   (5/112 cells). Analysis says not a port bug — the device sits inside the
+   host f32 twin envelope on every tight cell; disclosed via the harness's
+   CRIT2_TIGHT mechanism. A criteria/spec recalibration, not a kernel fix.
+c. **masktools §2.2 — CUDA-twin confirmation** that the upstream CUDA build
+   really produces the collapsed 16-bit LUT output. The OpenCL device run
+   confirms only the port's pinned collapse; the keep-bug-compatibility
+   decision is recorded in `MASKTOOLS_PORT_SPEC.md` §3.
+d. **KFM Deblock — kf_sharpen / kf_show_sharpen_coeff CUDA
+   texture-fetch-precision comparison**: graduation out of
+   `kfm_deblock_rig.cl` stays blocked (quarantined, `// RIG-VERIFY`);
+   bridged informationally by fixed-point texture emulation (the show
+   kernel matches the trunc emulation exactly).
+e. **KTGMC — prepare-pair host block-geometry model validation against a
+   CUDA build** (`MV_PORT_SPEC.md` §6.1): the device run validated the
+   kernels against the trusted goldens; the CUDA host geometry is untested.
+f. **KTGMC — `kt_most_freq_mv` tie-break reconciliation vs CUDA**
+   (`ktgmc_motion.cl` ~line 620–635): the OpenCL device agrees with the
+   pinned CPU tie-break in all 12 tie-bearing cases run; the CUDA side is
+   not runnable on that machine.
+g. **KFM — `run_kfm_edgelevel.py` double-path golden artifact** (runner-side,
+   not device): the golden diverges from true f32-per-op semantics at
+   rdiff ∈ {0.25, 0.35, 0.45, 0.55}; the device matches the f32 mirror
+   there. Runners were deliberately NOT edited by the device pass — fix the
+   golden+mirror pair through the normal mirror+golden process.

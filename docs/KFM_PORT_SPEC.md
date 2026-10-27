@@ -20,7 +20,7 @@ KTGMC kernels were. KDeband was chosen first (see docs/PORT_PLAN.md §5).
 | `KDeband.cu` | `KTemporalNR`, `KDeband`, `KEdgeLevel` | **KDeband core done**; **KEdgeLevel done**; **KTemporalNR done** |
 | `KFMKernel.cu` | `KPatchCombe`, `KFMSwitch`, `KFMPad`, `KFMDecimate`, `AssumeDevice` | inventoried: host-only, no device kernels (see below; its only kernel dep `kl_merge` is ported as `kf_merge_block`) |
 | `CombingAnalyze.cu` | `KFMSuper`, `KCleanSuper`, `KPreCycleAnalyze(_Show)`, `KFMSuperShow`, `KTelecine(_Super)`, `KSwitchFlag`, `KContainsCombe`, `KCombeMask`, `KRemoveCombe` | **all 15 device kernels done** (see the section below); only host pipelines remain |
-| `Deblock.cu` | `KDeblock`, `QPClip`, `ShowQP`, `FrameType` | **all 11 device kernels transcribed** (`kf_deblock`, `kf_make_qp_table`, `kf_deblock_show`, `kf_max_vh/v/h`, `kf_scale_qp`, `kf_sharpen_coeff`, `kf_merge_deblock` ALG-VERIFIED; `kf_sharpen`, `kf_show_sharpen_coeff` in the separate provisional `kfm_deblock_rig.cl`, `// RIG-VERIFY`, handoff spec in `docs/RIG_HANDOFF_KDEBLOCK.md`; QPClip is a no-op pass-through) |
+| `Deblock.cu` | `KDeblock`, `QPClip`, `ShowQP`, `FrameType` | **all 11 device kernels transcribed and ALG-VERIFIED** (`kf_deblock`, `kf_make_qp_table`, `kf_deblock_show`, `kf_max_vh/v/h`, `kf_scale_qp`, `kf_sharpen_coeff`, `kf_merge_deblock`, `kf_sharpen`, `kf_show_sharpen_coeff`; QPClip is a no-op pass-through) |
 | `DecombeUCF.cu` | `KCFieldDiff`, `KCFrameDiffDup`, `KNoiseClip`, `KAnalyzeNoise`, `KDecombUCF*` | **device kernels 8/8 done** (KNoiseClip + 7 reductions, see below; only host pipelines remain) |
 | `MergeStatic.cu` | `KTemporalDiff`, `KAnalyzeStatic`, `KMergeStatic` | **all 6 pipeline kernels done** (KDeband.cu-style core; KAnalyzeStatic host glue in `kfm_filterbase.cl`/`kfm_mergestatic.cl`) |
 
@@ -423,18 +423,21 @@ src/opencl/kfm/kernels/kfm_deblock.cl)
   `sim/kfm_deblock_qp_ref.cpp`.
 
 ### `KDeblock` sharpen (`kf_sharpen`, `kf_show_sharpen_coeff`,
-src/opencl/kfm/kernels/kfm_deblock_rig.cl) — `// RIG-VERIFY` transcriptions
+src/opencl/kfm/kernels/kfm_deblock.cl) — **GRADUATED 2026-10-28** (`// ALG-VERIFIED`)
 
 Faithful scalar transcriptions of the remaining self-contained Deblock.cu
-device kernels, kept in a **separate provisional file**
-(`kfm_deblock_rig.cl`, bannered PROVISIONAL/UNVERIFIED) so their
-needs-verification status is unmistakable next to the ALG-VERIFIED
-`kfm_deblock.cl`. Lanes/pixels are independent in all of them, so the scalar
-form is lane-identical to the vector CUDA kernels. They are **not** covered by
-`make test` (no CPU mirror / Python golden yet) and must be checked on a real
-OpenCL device before use. The full verification handoff spec for another
-agent (upstream line map, per-kernel traps, mirror+golden recipe, graduation
-checklist) is `docs/RIG_HANDOFF_KDEBLOCK.md`.
+device kernels, graduated 2026-10-28 out of the (now deleted) provisional
+`kfm_deblock_rig.cl` into `kfm_deblock.cl` and closed: mirror+golden pins
+(`python/run_kfm_deblock_aux.py` modes P/W), the OpenCL device run (both PX,
+bit-exact vs the goldens, `rig/dev_kfm_deblock.py`), and the CUDA
+texture-precision twin comparison (`rig/cuda_deblock_sharpen.cu`,
+`rig/CUDA_REPORT_kdeblock_texture.md`). `kf_show_sharpen_coeff` is CUDA
+bit-exact (0/51,144 px); `kf_sharpen` differs from CUDA by the characterised
+±1 texture-grid class (HW quantizes the bilinear result to the 16-bit unorm
+grid `round_half_up(v*257)/65535`; closed-form model bit-exact vs CUDA) plus
+1 px of upstream's own FMA contraction — accepted per
+`docs/RIG_HANDOFF_KDEBLOCK.md` §7 and recorded in the kernel comment. The
+full verification handoff spec (closed) is `docs/RIG_HANDOFF_KDEBLOCK.md`.
 
 Graduated to `kfm_deblock.cl` (`// ALG-VERIFIED` via
 `python/run_kfm_deblock_aux.py`, 1593 cases vs `sim/kfm_deblock_aux_ref.cpp`):
@@ -540,12 +543,12 @@ layouts, the 1/3-fold constant, unwritten flag borders).
   GaussResize unsharp clip, per-plane dispatch), the KDeblock pad/merge host
   sequencing (`kf_padv`/`kf_padh` themselves are done), and the rig proofs
   (merge accumulator-layout reconciliation + the sharpen-pair texture-gap
-  device comparison — see above and the handoff doc). With `kf_sharpen` /
-  `kf_show_sharpen_coeff` transcribed, all 11 Deblock.cu device kernels now
-  exist as OpenCL. Of the eight `kfm_deblock_rig.cl` kernels packaged for
-  handoff in `docs/RIG_HANDOFF_KDEBLOCK.md`, six have since graduated to
-  `// ALG-VERIFIED` in `kfm_deblock.cl`; only the sharpen pair remains
-  `// RIG-VERIFY` (pinned P/W behaviour — still mandates a device run).
+  device comparison — closed 2026-10-28, see above and the handoff doc). With
+  `kf_sharpen` / `kf_show_sharpen_coeff` transcribed, all 11 Deblock.cu device
+  kernels exist as OpenCL. All eight `kfm_deblock_rig.cl` kernels packaged for
+  handoff in `docs/RIG_HANDOFF_KDEBLOCK.md` have graduated to
+  `// ALG-VERIFIED` in `kfm_deblock.cl`; the rig file was emptied and deleted
+  (handoff closed 2026-10-28).
 - Remaining KFM families: the DecombeUCF.cu host pipelines (KDecombUCF* —
   heavy multi-clip sequencing; all 8 device kernels are done: KNoiseClip +
   the 7 reductions in kfm_decombeucf.cl). Deblock QPClip is a pure

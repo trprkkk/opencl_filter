@@ -79,6 +79,30 @@ collapsed output): no CUDA toolkit on that rig, so that item stays open.
 Until it closes: no silent fix — the goldens keep asserting the collapse,
 and the port keeps passing the faithful 8/255 arguments.
 
+**CUDA-twin confirmation (2026-10-28, second rig pass — decision stands,
+now fully confirmed).** `rig/lut_cuda_rig.cu` ran the *verbatim upstream*
+`kl_lut_xy` / `kl_lut_xyz` CUDA kernels with the real dispatcher
+(`lut_cuda_16` dispatching every 10/12/14/16-bit case to
+`bits_per_pixel=8`) on the same GPU (`rig/lut_cuda_out.txt`): 16-bit output
+is `lut[Y & 255]` / `lut[Z & 255]` on device — the first clip is dropped,
+and a real 14-bit full-depth table (deepest buildable) is provably read
+through the collapsed index, not the true-depth one. The collapsed-index
+reading of the upstream defect is now confirmed on **both** toolchains.
+
+**Correction to the prose above (2026-10-28):** the claim that "the host
+builds the table with the REAL depth and the CPU path indexes it that way"
+holds for **10/12/14-bit only**. For 16-bit lutxy upstream actually THROWS
+in `make_lut_data` (`lut_data.cpp:90–92`: `bits_per_pixel * num_input > 24`
+→ "16 bit 2 input is not supported") *before* any kernel runs, so the 16-bit
+2-input kernel collapse is reachable in the kernel code but unreachable in
+the shipped filter (CPU and CUDA alike). For 16-bit `lutxyz` the 3-input
+`make_lut_data<16>` case is commented out (`lut_data.cpp:32–41`) and the
+>24-bit guard would throw first (16×3=48) — consistent with the "16-bit
+3-input table is not even built" statement above. The KEEP
+bug-compatibility decision and the pinned collapse assertions are
+unaffected: the port's 16-bit `lut_xy`/`lut_xyz` paths transcribe the
+dispatcher behaviour, which is what both device runs confirm.
+
 The masking is also load-bearing for memory safety: a mutant that removed
 it segfaulted the mirror, because the 16-bit index would otherwise run off
 the 256-entry region the CUDA path actually addresses.
@@ -104,4 +128,5 @@ fill 120, f32 fill 60, copy 100, lut_x 100, lut_xy 100, lut_xyz 100, plus
 ## 5. Status
 
 The masktools CUDA surface is fully ported (5/5). Nothing rig-side is
-pending beyond the usual real-compiler build and the open question in §3.
+pending: the §3 open question was closed 2026-10-28 by the CUDA-twin run
+(collapsed indexing confirmed on GPU; see §3).

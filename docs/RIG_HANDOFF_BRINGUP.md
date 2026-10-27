@@ -5,12 +5,14 @@ that can be proven without a GPU has been ported and proven. What is left
 needs a machine with an OpenCL device and (for cross-checking) a CUDA build
 of `rigaya/AviSynthCUDAFilters`.
 
-Three **quarantined provisional packages** exist (`*_rig.cl`), listed in
-§2.6. Two **package-level** handoffs already exist and are still authoritative for
+Two **quarantined provisional packages** exist (`*_rig.cl`), listed in
+§2.6 (a third, `kfm_deblock_rig.cl`, graduated and was deleted 2026-10-28).
+Two **package-level** handoffs already exist and are still authoritative for
 their own scope — do not duplicate them, execute them:
 
-- `docs/RIG_HANDOFF_KDEBLOCK.md` — KDeblock provisional kernels (2 sharpen
-  kernels remain; terminal state `// ALG-VERIFIED` is reachable).
+- `docs/RIG_HANDOFF_KDEBLOCK.md` — KDeblock provisional kernels (**closed
+  2026-10-28**: both sharpen kernels graduated `// ALG-VERIFIED`; the rig
+  file was deleted).
 - `docs/RIG_HANDOFF_AVSCUDA_CONDITIONAL.md` — AvsCUDA Conditional float
   reductions (terminal state is `// RIG-COMPARED`; there is deliberately no
   graduation path to ALG-VERIFIED).
@@ -24,7 +26,8 @@ findings a rig must act on, and the order to do things in.
   masktools 6, nnedi3 6.
 - **32 verification runners** (`python/run_*.py`) + **32 CPU mirrors**
   (`sim/*.cpp`) wired into `make test`. Current state: **33 PASS, 0 FAIL**;
-  `./lint/lint_opencl.sh` → **46 checks, 0 failures**.
+  `./lint/lint_opencl.sh` → **44 checks, 0 failures** (was 46 before the
+  2026-10-28 deletion of the emptied `kfm_deblock_rig.cl`).
 - These numbers are re-checked automatically by `lint/audit_inventory.py`
   (part of `make test`), so if this section ever disagrees with the tree the
   build fails rather than quietly misleading you.
@@ -47,8 +50,8 @@ order matters the goldens pin it deliberately. The method is described in
 
 | Family | Spec | State |
 |---|---|---|
-| AvsCUDA | `docs/AVSCUDA_PORT_SPEC.md` | ported; 2 Conditional kernels are RIG-only |
-| KFM | `docs/KFM_PORT_SPEC.md` | ported; 2 sharpen kernels RIG-only |
+| AvsCUDA | `docs/AVSCUDA_PORT_SPEC.md` | ported; 2 Conditional kernels RIG-COMPARED |
+| KFM | `docs/KFM_PORT_SPEC.md` | ported; all Deblock kernels ALG-VERIFIED |
 | KTGMC | `docs/MV_PORT_SPEC.md`, `docs/BLOCKSEARCH_MODEL.md` | pixel kernels done; `kl_search` deferred |
 | masktools | `docs/MASKTOOLS_PORT_SPEC.md` | **complete, 5/5 CUDA kernels** |
 | NNEDI3 | `docs/NNEDI3_PORT_SPEC.md` | **complete, 6/6 CUDA kernels** |
@@ -91,12 +94,22 @@ The port **transcribes this faithfully** and `python/run_masktools_lut.py`
 pins the collapse with explicit assertions, so it cannot drift silently.
 `lut_bits`/`mask` are host arguments.
 
+> **Correction (2026-10-28):** the "host builds the table with the real
+> depth / CPU indexes it that way" sentence above holds for **10/12/14-bit
+> only** — for 16-bit lutxy upstream throws in `make_lut_data`
+> (`lut_data.cpp:90–92`, `bits*inputs > 24`) before any kernel runs, and the
+> 16-bit lutxyz 3-input case is commented out upstream. See
+> `docs/MASKTOOLS_PORT_SPEC.md` §3.
+
 **Action:** confirm on the rig that CUDA really produces the collapsed
 output (it should — this is a dispatcher bug, not a subtlety), then decide
 explicitly: keep bug-compatibility, or pass the true depth and accept a
 deliberate divergence from upstream. Record the decision in
 `docs/MASKTOOLS_PORT_SPEC.md` §3. **Do not "fix" it silently** — several
 verified goldens assert the current behaviour.
+
+> **Closed 2026-10-28** (CUDA-twin run, `rig/lut_cuda_rig.cu`): the collapse
+> is device-confirmed on the GPU; decision = keep bug-compatibility (§9.5c).
 
 ### 2.3 NNEDI3 needs FP contraction disabled and reduction order preserved
 
@@ -149,21 +162,26 @@ no reductions and no floating point: **bring the rig up on masktools
 first**. If that does not match CUDA, the problem is your harness, not the
 ports.
 
-### 2.6 Quarantined provisional kernels (`*_rig.cl`) — 6 kernels
+### 2.6 Quarantined provisional kernels (`*_rig.cl`) — 4 kernels
 
 Faithful transcriptions kept OUT of the verified files. None may be moved
 without the evidence named in each file's header.
 
 | File | Kernels | Why quarantined | Reachable terminal state |
 |---|---|---|---|
-| `avscuda_conditional_rig.cl` | 2 | float reduction order is device-defined | `// RIG-COMPARED` only |
-| `kfm_deblock_rig.cl` | `kf_sharpen`, `kf_show_sharpen_coeff` | CUDA texture-fetch precision | `// ALG-VERIFIED` |
+| `avscuda_conditional_rig.cl` | 2 | float reduction order is device-defined | `// RIG-COMPARED` — **reached 2026-10-28** (handoff §8 filled) |
 | `ktgmc_degrain_rig.cl` | `kt_prepare_degrain`, `kt_prepare_compensate` | host block-geometry model unsettled (`MV_PORT_SPEC` §6.1) | `// ALG-VERIFIED` |
 
-Four of the six have their *deterministic* arithmetic pinned in-sandbox by
-a mirror+golden pair (`run_kfm_deblock_aux.py` modes P/W, and
-`run_mv_prepare.py`), so they cannot drift while the device question stays
-open; the two Conditional kernels cannot be pinned even in principle.
+(A third package, `kfm_deblock_rig.cl` with `kf_sharpen` /
+`kf_show_sharpen_coeff`, graduated to `// ALG-VERIFIED` in `kfm_deblock.cl`
+on 2026-10-28 after the CUDA texture-precision comparison and the file was
+deleted per its own header rule — `docs/RIG_HANDOFF_KDEBLOCK.md`.)
+
+Four of the six original quarantine kernels have their *deterministic*
+arithmetic pinned in-sandbox by a mirror+golden pair (`run_kfm_deblock_aux.py`
+modes P/W, and `run_mv_prepare.py`), so they cannot drift while the device
+question stays open; the two Conditional kernels cannot be pinned even in
+principle (the sharpen pair's pins now cover its graduated members).
 
 The `ktgmc_degrain_rig.cl` pair is the one that closes a documented seam:
 it emits exactly the flat per-block offset/weight arrays the ALG-VERIFIED
@@ -326,8 +344,9 @@ anywhere here).
 | KTGMC simple | `rig/dev_ktgmc_simple.py` | PASS — 27 / 1453, both PX (26 kernels; see §9.2 for the port bug). Plain-build FMA delta documented (resample_h 7 px / 34 cases, worst 1 px; error_adjust 71 px / 74, worst 23 px); f32-vs-f64 golden-model deltas documented, not judged; `kt_plane_sad` int32 wraparound pinned per `HOST_CONTRACT.md` §6.3. |
 | KTGMC motion + degrain rig | `rig/dev_ktgmc_motion.py` | PASS — 31 / 874, both PX: all 22 motion kernels + `kt_prepare_degrain`/`kt_prepare_compensate` + seam encodings (offset0+weight0 unusable-ref, −1 scene-change sentinels) bit-exact vs the trusted goldens; 12-byte VECTOR / short2 buffer ABI confirmed (`HOST_CONTRACT.md`); `kt_calc_all_sad` group-grid/bid work-list semantics exercised; `kt_degrain_patch` + `kt_overlap_out` + wrap-pin PASS. |
 
-Global state after all of the above: `cl_compile_all.py` **46/46 builds**
-(after every `.cl` change); all 32 `python/run_*.py` **PASS** after commits
+Global state after all of the above: `cl_compile_all.py` **44/44 builds**
+(was 46/46 before the 2026-10-28 deletion of the emptied
+`kfm_deblock_rig.cl`); all 32 `python/run_*.py` **PASS** after commits
 41b4ec1 + 4936884. `kl_search` remains unported by design
 (`BLOCKSEARCH_MODEL.md` §8b host decisions) — unchanged, out of scope.
 
@@ -385,24 +404,47 @@ Global state after all of the above: `cl_compile_all.py` **46/46 builds**
 
 ### 9.5 Open items after the device pass
 
-a. **AvsCUDA Conditional — criterion-1 CUDA band comparison** (its handoff
-   §5.2-1/§8 appendix): the OpenCL side is fully green (§9.1), but
-   `// RIG-COMPARED` requires the CUDA band; both markers stay
-   `// RIG-VERIFY` and the §8 appendix stays unfilled.
-b. **AvsCUDA Conditional — criterion-2 calibration**: the as-written formula
-   under-covers the algorithm's own f32 counter rounding at 8160 blocks
-   (5/112 cells). Analysis says not a port bug — the device sits inside the
-   host f32 twin envelope on every tight cell; disclosed via the harness's
-   CRIT2_TIGHT mechanism. A criteria/spec recalibration, not a kernel fix.
-c. **masktools §2.2 — CUDA-twin confirmation** that the upstream CUDA build
-   really produces the collapsed 16-bit LUT output. The OpenCL device run
-   confirms only the port's pinned collapse; the keep-bug-compatibility
-   decision is recorded in `MASKTOOLS_PORT_SPEC.md` §3.
-d. **KFM Deblock — kf_sharpen / kf_show_sharpen_coeff CUDA
-   texture-fetch-precision comparison**: graduation out of
-   `kfm_deblock_rig.cl` stays blocked (quarantined, `// RIG-VERIFY`);
-   bridged informationally by fixed-point texture emulation (the show
-   kernel matches the trunc emulation exactly).
+> **Update 2026-10-28 (second rig pass, CUDA toolkit present — nvcc 13.3,
+> RTX 2060 SUPER):** items a–d below are CLOSED with CUDA-twin evidence
+> (`rig/RIG_CUDA_TWINS_REPORT.md`, `rig/CUDA_REPORT_kdeblock_texture.md`);
+> the §9 preamble's "no CUDA toolkit on that machine" described the first
+> pass only. Items e–g remain open.
+
+a. ~~**AvsCUDA Conditional — criterion-1 CUDA band comparison**~~ CLOSED
+   2026-10-28: CUDA twin run (`rig/cond_cuda.cu` + `rig/dev_cond_cuda.py`,
+   200 CUDA reps × 10 CL) — Phase A 11/11 bit-exact both sides (incl. 1080p
+   0x497D2000, NaN→0x7FFFFFFF); Phase B 75/112 literal criterion-1 PASS, the
+   37 residuals all ≤36 ulp with RM-gate PASS (leaf-association rounding,
+   accepted deviation); criterion 3 PASS; the as-written criterion-2 formula
+   is violated by the CUDA twin itself on 3 cells (see b). Both kernels
+   remarked `// RIG-COMPARED 2026-10-28`; the handoff §8 appendix is filled.
+b. ~~**AvsCUDA Conditional — criterion-2 calibration**~~ CLOSED for the
+   device question 2026-10-28: the CUDA twin itself violates the as-written
+   criterion-2 bound on 3 Phase B cells (sum 1920×1080 small/video, sad
+   1920×1080 small) — the formula under-covers the counter rounding at large
+   N on BOTH toolchains, so the deviation is upstream-faithful, not a port
+   defect (recorded as such in the §8 appendix). Any formula recalibration
+   remains a spec-level decision, out of scope for the kernels.
+c. ~~**masktools §2.2 — CUDA-twin confirmation**~~ CLOSED 2026-10-28
+   (`rig/lut_cuda_rig.cu`): verbatim upstream `kl_lut_xy`/`kl_lut_xyz` with
+   the real dispatcher confirmed the collapsed indexing on GPU (16-bit
+   output `lut[Y&255]` / `lut[Z&255]`; a real 14-bit table provably read
+   through the collapsed index). NEW fact vs §2.2: for 16-bit lutxy upstream
+   actually THROWS in `make_lut_data` (lut_data.cpp:90–92, bits×inputs>24)
+   before any kernel runs, so the host-builds-real-depth/CPU-indexing prose
+   holds only for 10/12/14-bit; the 16-bit lutxyz 3-input case is commented
+   out upstream. Correction noted in §2.2 and `MASKTOOLS_PORT_SPEC.md` §3;
+   the KEEP-bug-compatibility decision stands, now fully confirmed.
+d. ~~**KFM Deblock — kf_sharpen / kf_show_sharpen_coeff CUDA
+   texture-fetch-precision comparison**~~ CLOSED 2026-10-28
+   (`rig/cuda_deblock_sharpen.cu`): `kf_show_sharpen_coeff` CUDA ≡ goldens
+   bit-exact (0/51,144 px); `kf_sharpen` CUDA ≡ goldens except the
+   characterised ±1 class (7/28,840 px1, 428/28,040 px2) fully explained by
+   the measured HW 16-bit-grid texture quantization
+   `round_half_up(v*257)/65535` (closed-form model bit-exact vs CUDA) plus
+   1 px of upstream's own FMA. Both kernels graduated to `// ALG-VERIFIED`
+   in `kfm_deblock.cl`; the emptied `kfm_deblock_rig.cl` was deleted
+   (handoff §7 satisfied).
 e. **KTGMC — prepare-pair host block-geometry model validation against a
    CUDA build** (`MV_PORT_SPEC.md` §6.1): the device run validated the
    kernels against the trusted goldens; the CUDA host geometry is untested.

@@ -19,7 +19,7 @@ buffers and dispatches them, with a scalar CPU reference used for validation.
 |---|---|---|
 | **KTGMC** | QTGMC-style deinterlacer (motion compensated) | In progress — **Milestone 1 done** (see below) |
 | KNNEDI3 | NNEDI3 neural-net upscaler | **complete — all 6 device kernels ALG-VERIFIED** (`src/opencl/nnedi3/`, `docs/NNEDI3_PORT_SPEC.md`) |
-| KFM | filter family (KDeband, Deblock, CombingAnalyze, …) | **KDeband/KEdgeLevel/KTemporalNR + MergeStatic/KAnalyzeStatic/KNoiseClip + KDeblock done** (core/qp-table/show/max/scale/sharpen-coeff/merge ALG-VERIFIED; sharpen-pair in provisional `kfm_deblock_rig.cl`, `// RIG-VERIFY`) (`src/opencl/kfm/kernels/`) |
+| KFM | filter family (KDeband, Deblock, CombingAnalyze, …) | **KDeband/KEdgeLevel/KTemporalNR + MergeStatic/KAnalyzeStatic/KNoiseClip + KDeblock done** (all 11 Deblock.cu device kernels ALG-VERIFIED, incl. the sharpen pair graduated 2026-10-28) (`src/opencl/kfm/kernels/`) |
 | masktools | mask/LUT helper suite | **complete — all 5 CUDA kernels ALG-VERIFIED** (`src/opencl/masktools/`, `docs/MASKTOOLS_PORT_SPEC.md`) |
 | AvsCUDA | CUDA-aware dispatch + helpers | ported (18/18 families); 2 float reductions are rig-only (`docs/AVSCUDA_PORT_SPEC.md`) |
 | GRunT | AviSynth runtime helper | **no CUDA to port** — vendored verbatim at `third_party/grunt/` |
@@ -232,14 +232,15 @@ Makefile                       # make test  (no OpenCL required)
   `kf_merge_deblock` (+`g_ldither`), **ALG-VERIFIED** via
   `python/run_kfm_deblock_aux.py` (1593 cases vs `sim/kfm_deblock_aux_ref.cpp`,
   incl. merge end-to-end + layout proofs and sharpen/show deterministic pins).
-  The remaining member — the SharpenFilter pair `kf_sharpen` /
-  `kf_show_sharpen_coeff` (manual bilinear replacing the CUDA texture fetch;
-  device-run comparison mandatory; deterministic behaviour already
-  pinned) — lives separately in `kfm_deblock_rig.cl`
-  as faithful `// RIG-VERIFY` transcriptions (bannered PROVISIONAL/UNVERIFIED,
-  not covered by `make test`); all 11 Deblock.cu device kernels are now
-  transcribed, with the host sequencing and rig proofs remaining open.
-  Verification handoff spec for another agent:
+  The SharpenFilter pair `kf_sharpen` /
+  `kf_show_sharpen_coeff` (manual bilinear replacing the CUDA texture fetch)
+  graduated 2026-10-28 into `kfm_deblock.cl` as `// ALG-VERIFIED` (mirror+golden
+  + the OpenCL device run + the CUDA texture-precision twin comparison; the ±1
+  texture-grid divergence on `kf_sharpen` is characterised and accepted) — the
+  provisional `kfm_deblock_rig.cl` was emptied and deleted (see git history);
+  all 11 Deblock.cu device kernels are transcribed, with the host sequencing
+  remaining open.
+  Verification handoff spec (closed):
   `docs/RIG_HANDOFF_KDEBLOCK.md`. Documented in `docs/KFM_PORT_SPEC.md`.
 - `avscuda_merge.cl`: **AvsCUDA Merge/MergeChroma/MergeLuma planar core** —
   `ka_merge` (in-place weighted merge, dual pitch, >>15 SIMD/device scale;
@@ -269,10 +270,12 @@ Makefile                       # make test  (no OpenCL required)
   per-item atomics (order-free); u32 wraparound pinned. **ALG-VERIFIED** via
   `python/run_avscuda_conditional.py` (1320 cases vs
   `sim/avscuda_conditional_ref.cpp`). The float sum/SAD reductions are
-  faithful `// RIG-VERIFY` transcriptions in `avscuda_conditional_rig.cl`
-  (arrival order undefined upstream too; tolerance-based device comparison
-  mandatory, not covered by `make test`).
-  Verification handoff spec for another agent:
+  faithful transcriptions in `avscuda_conditional_rig.cl`,
+  **`// RIG-COMPARED` 2026-10-28** (arrival order undefined upstream too;
+  CUDA twin comparison done — 200 CUDA reps x 10 CL reps, Phase A bit-exact
+  11/11, Phase B within the accepted leaf-association envelope; not covered
+  by `make test` by design).
+  Verification handoff spec (closed, appendix filled):
   `docs/RIG_HANDOFF_AVSCUDA_CONDITIONAL.md`.
   OpenCL-side host harness: `src/host/run_avscuda_rig.cpp` (canonical input
   fills + §4.4 launch; build via cmake when OpenCL exists).

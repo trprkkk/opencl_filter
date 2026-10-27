@@ -229,11 +229,11 @@ To get a working deinterlacer you must port the mvtools-equivalent layers:
   (`python/run_kfm_deblock_aux.py`, 1593 cases, integer/float32-exact,
   incl. merge end-to-end + layout proofs and sharpen/show deterministic
   pins). The SharpenFilter pair
-  `kf_sharpen` / `kf_show_sharpen_coeff` lives separately in the
-  provisional `kfm_deblock_rig.cl` as `// RIG-VERIFY` (faithful,
-  unverified — not covered by `make test`, handoff spec in
-  `docs/RIG_HANDOFF_KDEBLOCK.md`); all 11 Deblock.cu device kernels are
-  transcribed, with only host sequencing and rig proofs remaining open.
+  `kf_sharpen` / `kf_show_sharpen_coeff` graduated 2026-10-28 into
+  `kfm_deblock.cl` as `// ALG-VERIFIED` (mirror+golden + device run + CUDA
+  texture-precision comparison; see `docs/RIG_HANDOFF_KDEBLOCK.md`, closed);
+  all 11 Deblock.cu device kernels are transcribed, with only host
+  sequencing remaining open.
   Full KFM map + next candidates (DecombeUCF host pipelines / Deblock
   helpers) are in `docs/KFM_PORT_SPEC.md`.
 - **AvsCUDA** (`AvsCUDA/`, MIT): batch-1 done — the Merge planar core
@@ -244,7 +244,7 @@ To get a working deinterlacer you must port the mvtools-equivalent layers:
   `ka_convert_higher`, `ka_convert_from/to_float`, 10 kernels in
   `avscuda_convert.cl`, 1320 cases), plus batch-3 Conditional metrics (15
   kernels in `avscuda_conditional.cl`, 1320 cases; the 2 float reductions
-  are `// RIG-VERIFY` in `avscuda_conditional_rig.cl`), plus batch-4
+  are `// RIG-COMPARED` 2026-10-28 in `avscuda_conditional_rig.cl`), plus batch-4
   FilteredResizeH/V (8 kernels in `avscuda_resample.cl`, 1230 cases).
   AvsCUDA is now fully ported (18/18 templates); host plumbings
   (`Copy.cu`, `memcpy_kernel`) and the debug OSD were excluded by census.

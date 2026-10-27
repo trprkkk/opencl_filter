@@ -17,10 +17,13 @@
  *   kf_sharpen_coeff  kl_sharpen_coeff twin (QP -> sharpen LUT)
  *   kf_merge_deblock  kl_merge_deblock twin (Bayer accumulator merge)
  * plus the kf_norm_qscale helper, the g_deblock_offset tables (g_offx/g_offy),
- * the g_sharpen_coeff LUT and the g_ldither Bayer table.  The remaining
- * KDeblock-family transcriptions (kf_sharpen, kf_show_sharpen_coeff) are
- * // RIG-VERIFY and live separately in kfm_deblock_rig.cl — see
- * docs/RIG_HANDOFF_KDEBLOCK.md for their verification handoff spec.
+ * the g_sharpen_coeff LUT and the g_ldither Bayer table, and the sharpen pair
+ *   kf_sharpen        kl_sharpen twin (SharpenFilter; texture->manual bilinear)
+ *   kf_show_sharpen_coeff  kl_show_sharpen_coeff twin (coeff visualiser)
+ * plus the kf_sharpen_bilinear helper — graduated 2026-10-28 out of the
+ * (now deleted) kfm_deblock_rig.cl after the CUDA texture-precision run
+ * (docs/RIG_HANDOFF_KDEBLOCK.md §7; see their per-kernel comments for the
+ * accepted texture-quantization divergence).
  *
  * Kernel math (per block (bx,by), a faithful scalar transcription of
  * kl_deblock; channels/pixels are independent):
@@ -53,7 +56,7 @@
  * Host seam (RIG-VERIFY): KDeblock::DeblockPlane first mirror-pads the plane
  * (8 px each side) into `src` (kl_padv/kl_padh live in KFMFilterBase and are
  * not ported here), builds the QP table (kf_make_qp_table) and finally merges
- * the accumulator (kf_merge_deblock, in kfm_deblock_rig.cl) with the Bayer
+ * the accumulator (kf_merge_deblock) with the Bayer dither.  Because the CUDA
  * dither.  Because the CUDA block reads an 8x8 tile at an offset up to +7,
  * the src passed to kf_deblock must be the padded plane (a faithful host
  * config).  A block's offset index range [count_minus_1, 2*count_minus_1]
@@ -69,8 +72,10 @@
  * (+2 ushort4, +8 rows).  Device-confirmed 2026-10-28 (rig/dev_kfm_deblock.py):
  * the handoff §5 layout E2E — device accumulator feeding device
  * kf_merge_deblock vs the packed-quad golden — is bit-exact on the rig, both
- * PX.  The CUDA-twin comparison for the quarantined sharpen pair remains open
- * (kfm_deblock_rig.cl / docs/RIG_HANDOFF_KDEBLOCK.md).
+ * PX.  The CUDA-twin texture comparison for the sharpen pair was closed
+ * 2026-10-28 (rig/cuda_deblock_sharpen.cu; the pair now lives here,
+ * // ALG-VERIFIED — see their per-kernel comments and
+ * docs/RIG_HANDOFF_KDEBLOCK.md §7).
  * ==========================================================================*/
 
 /* Device-verified (rig/dev_kfm_deblock.py, rig/diag_fma_deblock.py): default
@@ -570,4 +575,135 @@ kernel void kf_merge_deblock(
               (float)g_ldither[y & 7][X & 1][L] * (1.0f / 64.0f);
     v = fmin(v, maxv);
     out[x + y * out_pitch] = (PX)v;
+}
+
+/* ---------------------------------------------------------------------------
+ * kf_sharpen_bilinear — manual bilinear sample of the uchar coeff plane at
+ * pixel (x,y), i.e. coeff-texel (x/8, y/8).  This replaces the CUDA texture
+ * fetch `tex2D<float>(coeff, x/8+0.5, y/8+0.5)` (Clamp/Linear/
+ * NormalizedFloat over the qp-sized coeff plane — the clamp never engages
+ * because width is a multiple of 8 and the coeff plane is qp-sized with a
+ * +1-block margin, so taps ix+1/iy+1 are always in bounds, exactly as the CPU
+ * twins rely on).  Expression and op order follow the CPU twins verbatim;
+ * returns the UNNORMALIZED (0..255-scale) value — callers normalize.
+ * -------------------------------------------------------------------------*/
+static float kf_sharpen_bilinear(
+    __global const uchar* __restrict coeff, int coeff_pitch,
+    int x, int y)
+{
+    float fx = (float)x * (1.0f / 8.0f);
+    float fy = (float)y * (1.0f / 8.0f);
+    int ix = (int)fx;
+    int iy = (int)fy;
+    float c00 = (float)coeff[ix + iy * coeff_pitch];
+    float c01 = (float)coeff[(ix + 1) + iy * coeff_pitch];
+    float c10 = (float)coeff[ix + (iy + 1) * coeff_pitch];
+    float c11 = (float)coeff[(ix + 1) + (iy + 1) * coeff_pitch];
+    float fracx = fx - (float)ix;
+    float fracy = fy - (float)iy;
+    return (c00 * (1.0f - fracx) + c01 * fracx) * (1.0f - fracy) +
+           (c10 * (1.0f - fracx) + c11 * fracx) * fracy;
+}
+
+/* ---------------------------------------------------------------------------
+ * kf_sharpen — SharpenFilter core (kl_sharpen twin; cpu_sharpen is the CPU
+ * twin with guarded borders).  Per pixel:
+ *   s = src; (l,h) = min/max of s over the 3x3 window with edge-clamped reads
+ *   c = bilinear(coeff, x/8, y/8) / 255        (manual; replaces tex2D)
+ *   u = unsharp[x + y*pitch]                   (shares the dst pitch, as CUDA)
+ *   dst = (int)clamp(s + (s-u)*c + 0.5f, l, h) (C-truncation)
+ * The 3x3 window transcribes the DEVICE form verbatim, INCLUDING the upstream
+ * quirk `min(x + 1, height - 1)` (x clamped by height, not width — differs
+ * from the CPU twin wherever x+1 > height-1, i.e. when width > height).
+ * The CPU twin instead guards borders with ifs and skips the window when
+ * c == 0 (equivalent result: clamp(s+0.5,l,h) truncated == s since l<=s<=h).
+ * Host contract (as the SharpenFilter host guarantees): width is a multiple
+ * of 8; coeff is the qp-sized uchar plane (block margin included), so the
+ * bilinear taps are always in bounds; unsharp shares dst geometry/pitch.
+ * Grid: 2D (width, height).
+ * // ALG-VERIFIED: deterministic behaviour pinned by sim/kfm_deblock_aux_ref.cpp
+ * // + python/run_kfm_deblock_aux.py (P mode: quirk configs, c==0 identity,
+ * // float32-exact golden; make test).  OpenCL device run PASS vs the
+ * // manual-bilinear golden (2026-10-28, rig/dev_kfm_deblock.py, both PX,
+ * // bit-exact; the upstream quirk min(x+1,height-1) proven to bite on
+ * // device).  CUDA twin comparison closed 2026-10-28
+ * // (rig/cuda_deblock_sharpen.cu, rig/CUDA_REPORT_kdeblock_texture.md):
+ * // CUDA == goldens except 7/28,840 px1 + 428/28,040 px2, all +/-1 on the
+ * // sharpen output boundary — ACCEPTED DIVERGENCE (docs/RIG_HANDOFF_KDEBLOCK.md
+ * // §7): the CUDA texture path quantizes the HW-bilinear result to the 16-bit
+ * // unorm grid `round_half_up(v*257)/65535` (closed-form model bit-exact vs
+ * // CUDA over 11,520 probe + 108,024 output px) while this port uses the
+ * // load-based manual float32 bilinear; plus 1/28,040 px from upstream's own
+ * // default-FMA contraction (this file pins FP_CONTRACT OFF).  Characterised
+ * // and accepted per §7; no tolerance weakening of the goldens.
+ * -------------------------------------------------------------------------*/
+kernel void kf_sharpen(
+    __global PX* __restrict dst, int width, int height, int pitch,
+    __global const PX* __restrict src, int src_pitch,
+    __global const uchar* __restrict coeff, int coeff_pitch,
+    __global const PX* __restrict unsharp)
+{
+    int x = (int)get_global_id(0);
+    int y = (int)get_global_id(1);
+    if (x >= width || y >= height) return;
+
+    int s = (int)src[x + y * src_pitch];
+    int l = s;
+    int h = s;
+    int v;
+
+    v = (int)src[max(x - 1, 0) + max(y - 1, 0) * src_pitch];
+    l = min(l, v); h = max(h, v);
+    v = (int)src[(x + 0) + max(y - 1, 0) * src_pitch];
+    l = min(l, v); h = max(h, v);
+    v = (int)src[min(x + 1, height - 1) + max(y - 1, 0) * src_pitch];
+    l = min(l, v); h = max(h, v);
+    v = (int)src[max(x - 1, 0) + (y + 0) * src_pitch];
+    l = min(l, v); h = max(h, v);
+    v = (int)src[min(x + 1, height - 1) + (y + 0) * src_pitch];
+    l = min(l, v); h = max(h, v);
+    v = (int)src[max(x - 1, 0) + min(y + 1, height - 1) * src_pitch];
+    l = min(l, v); h = max(h, v);
+    v = (int)src[(x + 0) + min(y + 1, height - 1) * src_pitch];
+    l = min(l, v); h = max(h, v);
+    v = (int)src[min(x + 1, height - 1) + min(y + 1, height - 1) * src_pitch];
+    l = min(l, v); h = max(h, v);
+
+    float c = kf_sharpen_bilinear(coeff, coeff_pitch, x, y) * (1.0f / 255.0f);
+    int u = (int)unsharp[x + y * pitch];
+    float r = (float)s + (float)(s - u) * c + 0.5f;
+    if (r < (float)l) r = (float)l; else if (r > (float)h) r = (float)h;
+    dst[x + y * pitch] = (PX)(int)r;
+}
+
+/* ---------------------------------------------------------------------------
+ * kf_show_sharpen_coeff — SharpenFilter `show` visualiser
+ * (kl_show_sharpen_coeff twin; cpu_show_sharpen_coeff is the exact CPU twin
+ * for the manual-bilinear form).  Per pixel:
+ *   dst = (PX)(int)bilinear(coeff, x/8, y/8)
+ * i.e. the unnormalized manual bilinear, C-truncated — exactly the CPU twin's
+ * expression (the device computes (int)(normalized_tex*255), equal up to
+ * texture-filter precision).  Same coeff host contract as kf_sharpen.
+ * Grid: 2D (width, height).
+ * // ALG-VERIFIED: deterministic behaviour pinned by sim/kfm_deblock_aux_ref.cpp
+ * // (W mode) + python/run_kfm_deblock_aux.py (ramps, fractional taps,
+ * // float32-exact golden; make test).  OpenCL device run PASS vs that golden
+ * // (2026-10-28, rig/dev_kfm_deblock.py, both PX; matches the trunc texture
+ * // emulation exactly).  CUDA twin comparison closed 2026-10-28
+ * // (rig/cuda_deblock_sharpen.cu, rig/CUDA_REPORT_kdeblock_texture.md):
+ * // CUDA == goldens bit-exact, 0/51,144 px differ (both PX) — no gap.
+ * // For the texture-path quantization note shared with kf_sharpen (16-bit
+ * // unorm grid `round_half_up(v*257)/65535` vs this port's load-based fetch),
+ * // see kf_sharpen's comment — here it is provably output-invisible.
+ * -------------------------------------------------------------------------*/
+kernel void kf_show_sharpen_coeff(
+    __global PX* __restrict dst, int width, int height, int pitch,
+    __global const uchar* __restrict coeff, int coeff_pitch)
+{
+    int x = (int)get_global_id(0);
+    int y = (int)get_global_id(1);
+    if (x >= width || y >= height) return;
+
+    float c = kf_sharpen_bilinear(coeff, coeff_pitch, x, y);
+    dst[x + y * pitch] = (PX)(int)c;
 }

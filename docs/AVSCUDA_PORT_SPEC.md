@@ -81,13 +81,17 @@ u32 wraparound pinned with oversized frames; u64 needs OpenCL 2.0 or
 cl_khr_int64_base_atomics). The float hist index spells out max(0,min(t,65535))
 so NaN yields 65535 like CUDA. Width-mult-4, the 32/64-bit host threshold and
 the average/SAD host divisions are pinned as contracts. The two FLOAT sum/SAD
-reductions are faithful // RIG-VERIFY transcriptions in
+reductions are faithful transcriptions in
 `avscuda_conditional_rig.cl` (portable __local tree + CAS-loop float atomic;
 cross-block arrival order is undefined upstream too, so only a
 tolerance-based device comparison can verify them -- no mirror, no pin).
-Verification handoff spec for another agent:
-`docs/RIG_HANDOFF_AVSCUDA_CONDITIONAL.md` (device-run protocol, exact anchors
-+ in-band criteria; terminal state `// RIG-COMPARED`, never ALG-VERIFIED).
+**// RIG-COMPARED 2026-10-28** — CUDA twin comparison done (Phase A 11/11
+bit-exact; Phase B criterion-1 literal 75/112 with the 37 residuals <=36 ulp
+inside the RM/twin envelopes, accepted; criterion-2 as-written under-covers
+both toolchains; criterion-3 PASS). Verification handoff spec (closed,
+results appendix filled):
+`docs/RIG_HANDOFF_AVSCUDA_CONDITIONAL.md` (terminal state `// RIG-COMPARED`,
+never ALG-VERIFIED).
 OpenCL-side host harness `src/host/run_avscuda_rig.cpp` implements the §4.4
 launch contract + canonical fills (handoff §5); the kernels now additionally
 carry `reqd_work_group_size(16,16,1)` so a wrong local size fails at enqueue.
@@ -117,7 +121,7 @@ channel/uniform/random masks, non-mult-4 widths, RGB full+partial masks).
 - `src/opencl/avscuda/kernels/avscuda_filters.cl` — the 4 invert kernels.
 - `src/opencl/avscuda/kernels/avscuda_convert.cl` — the 10 convert kernels.
 - `src/opencl/avscuda/kernels/avscuda_conditional.cl` — the 15 conditional
-  kernels; `avscuda_conditional_rig.cl` — the 2 float // RIG-VERIFY kernels.
+  kernels; `avscuda_conditional_rig.cl` — the 2 float kernels, // RIG-COMPARED 2026-10-28.
 - `src/opencl/avscuda/kernels/avscuda_resample.cl` — the 8 resizer kernels.
 - `sim/avscuda_merge_ref.cpp`, `sim/avscuda_filters_ref.cpp`,
   `sim/avscuda_convert_ref.cpp` — CPU mirrors (int-token protocol;

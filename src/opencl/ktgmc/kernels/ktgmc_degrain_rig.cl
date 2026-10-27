@@ -6,8 +6,9 @@
  *     kl_prepare_compensate  (:2137-2181)  -> kt_prepare_compensate
  *
  * This file is DELIBERATELY SEPARATE from the verified ktgmc_motion.cl, the
- * same quarantine convention used by kfm_deblock_rig.cl and
- * avscuda_conditional_rig.cl.  Do not move a kernel out of here without the
+ * same quarantine convention used by avscuda_conditional_rig.cl (the
+ * kfm_deblock_rig.cl predecessor graduated and was deleted 2026-10-28).
+ * Do not move a kernel out of here without the
  * evidence described in §"Graduation" below.
  *
  * -- Why they are quarantined -----------------------------------------------

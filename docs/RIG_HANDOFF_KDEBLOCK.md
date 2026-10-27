@@ -1,5 +1,20 @@
 # RIG HANDOFF — KDeblock provisional kernels (verification spec for another agent)
 
+> **CLOSED 2026-10-28.** The last two kernels (`kf_sharpen`,
+> `kf_show_sharpen_coeff`) graduated to `// ALG-VERIFIED` in `kfm_deblock.cl`
+> and the (now empty) `kfm_deblock_rig.cl` was deleted — per §7 this file's
+> remaining-kernel sections stay as the historical spec, with a pointer to
+> git history. Closing evidence: mirror+golden pins (`run_kfm_deblock_aux.py`
+> modes P/W), the OpenCL device run (28/1000, both PX,
+> `rig/dev_kfm_deblock.py`), and the CUDA texture-precision twin comparison
+> (`rig/cuda_deblock_sharpen.cu` → `rig/CUDA_REPORT_kdeblock_texture.md`:
+> `kf_show_sharpen_coeff` CUDA ≡ goldens bit-exact, 0/51,144 px; `kf_sharpen`
+> CUDA ≡ goldens except the characterised ±1 class 7/28,840 px1 + 428/28,040
+> px2, fully explained by the measured HW texture 16-bit-grid quantization
+> `round_half_up(v*257)/65535` (closed-form model bit-exact vs CUDA), plus
+> 1 px from upstream's own FMA contraction). Everything below is the original
+> handoff text, kept for the record.
+
 This document hands the **unverified** KDeblock-family OpenCL kernels to another
 agent (human or AI) for verification. It is written to be self-sufficient: if
 you follow it top to bottom you can verify all eight kernels without asking the
@@ -7,11 +22,10 @@ original author anything.
 
 ## 0. TL;DR
 
-- **Package under verification:** `src/opencl/kfm/kernels/kfm_deblock_rig.cl`
-  (8 kernels + 2 tables at handoff, all `// RIG-VERIFY`; 6 kernels + 2 tables
-  have since graduated — only the 2 sharpen kernels remain (deterministic
-  behaviour pinned by mirror+golden; device run still required) — deliberately separated from the
-  verified `kfm_deblock.cl`).
+- **Package under verification:** ~~`src/opencl/kfm/kernels/kfm_deblock_rig.cl`~~
+  — graduated and deleted 2026-10-28 (all 8 kernels now `// ALG-VERIFIED` in
+  `kfm_deblock.cl`; the 2 sharpen kernels closed by the CUDA texture run, see
+  the banner above).
 - **Ground truth:** `rigaya/AviSynthCUDAFilters`, `KFM/Deblock.cu`, commit
   `cceb8da0e623e6bf5eea2cf655b06d4428e1600b` (§2).
 - **Your job:** for each kernel, build the repo-standard verification pair —
@@ -36,8 +50,8 @@ original author anything.
 | 4 | `kf_max_h` | `kl_max_h` | `cpu_max_h` (exact) | easy — **GRADUATED** |
 | 5 | `kf_scale_qp` | `kl_scale_qp` | `cpu_scale_qp` (exact) | easy — **GRADUATED** |
 | 6 | `kf_sharpen_coeff` | `kl_sharpen_coeff` | `cpu_sharpen_coeff` (exact) | easy — **GRADUATED** |
-| 7 | `kf_sharpen` | `kl_sharpen` | `cpu_sharpen` (differs: guarded borders, no quirk) | hard (texture gap + quirk — device run required) — **PINNED** (mirror+golden; not graduated) |
-| 8 | `kf_show_sharpen_coeff` | `kl_show_sharpen_coeff` | `cpu_show_sharpen_coeff` (exact for the manual form) | medium (mirror+golden pins it; device run closes the texture gap) — **PINNED** (not graduated) |
+| 7 | `kf_sharpen` | `kl_sharpen` | `cpu_sharpen` (differs: guarded borders, no quirk) | hard (texture gap + quirk — device run required) — **GRADUATED** (mirror+golden + device run + CUDA texture comparison, ±1 class accepted; 2026-10-28) |
+| 8 | `kf_show_sharpen_coeff` | `kl_show_sharpen_coeff` | `cpu_show_sharpen_coeff` (exact for the manual form) | medium (mirror+golden pins it; device run closes the texture gap) — **GRADUATED** (CUDA bit-exact, 0/51,144 px; 2026-10-28) |
 
 Plus two file-scope tables (`g_ldither`, `g_sharpen_coeff`), the
 `kf_sharpen_bilinear` helper, and a private copy
@@ -278,7 +292,7 @@ kernel void kf_sharpen_coeff(__global uchar* dst, int width, int height, int pit
 - Integer; sweep `qp` over 0–65535 with emphasis on boundaries
   (`q` = 24/25 i.e. `qp` = 199/200/207).
 
-### 4.5 `kf_sharpen` — **PINNED**, device run required (do last, after §4.6)
+### 4.5 `kf_sharpen` — **GRADUATED** (was: PINNED, device run required)
 
 ```c
 kernel void kf_sharpen(
@@ -335,7 +349,7 @@ Must-check facts:
    output: expect exact match almost everywhere with rare ±1 diffs at
    truncation boundaries; characterise, do not hand-wave.
 
-### 4.6 `kf_show_sharpen_coeff` — **PINNED**, device run required
+### 4.6 `kf_show_sharpen_coeff` — **GRADUATED** (was: PINNED, device run required)
 
 ```c
 kernel void kf_show_sharpen_coeff(
@@ -407,17 +421,28 @@ A mechanical diff script (parse both files, compare) beats eyeballing.
 - [ ] Docs updated: `docs/KFM_PORT_SPEC.md`, `README.md`, `docs/PORT_PLAN.md`
       (and this file: mark the kernel graduated).
 - [ ] For `kf_merge_deblock` only: the §5 end-to-end layout test passes.
-- [ ] For `kf_sharpen` / `kf_show_sharpen_coeff` only: a device run compares
+- [x] For `kf_sharpen` / `kf_show_sharpen_coeff` only: a device run compares
       `.cl` output against real CUDA device output (§4.5-5); the ±1 truncation
       boundary diffs are characterised and accepted. Mirror+golden alone does
       NOT graduate these two (for `kf_show_sharpen_coeff` it pins the
       deterministic behaviour, which is still worth doing first).
+      **DONE 2026-10-28** — `rig/cuda_deblock_sharpen.cu` +
+      `rig/CUDA_REPORT_kdeblock_texture.md` (show: 0/51,144 px; sharpen:
+      7/28,840 px1 + 428/28,040 px2, all ±1, closed-form HW texture-grid model
+      `round_half_up(v*257)/65535` bit-exact vs CUDA; 1 px upstream FMA).
 
 When the last kernel graduates and `kfm_deblock_rig.cl` is empty: **delete the
 file** and this handoff doc's remaining-kernel sections (keep a one-line
-pointer to the git history).
+pointer to the git history). **DONE 2026-10-28** — file deleted; this doc kept
+as a historical record (banner above) instead of a full section removal.
 
 ## 8. Environment constraints (read before planning a device run)
+
+> **Correction (2026-10-28, device pass):** the "no CUDA toolkit" statement
+> below described the *original sandbox* only and is stale — the 2026-10-28
+> rig machine (RTX 2060 SUPER) does have CUDA (nvcc 13.3), and the sharpen
+> pair was closed with it (`rig/cuda_deblock_sharpen.cu`). Kept verbatim as
+> the historical record.
 
 This sandbox has **no GPU, no CUDA toolkit, no OpenCL ICD, no AviSynthNeo** —
 and the Debian mirrors are unreachable, so even pocl cannot be installed.

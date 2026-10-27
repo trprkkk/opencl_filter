@@ -9,8 +9,9 @@
  * the ports below use one atomic_add per work-item straight into the global
  * counter — the same metric with no arrival-order dependence.  The FLOAT sum/
  * SAD reductions are order-sensitive AND need float atomics, so they live as
- * faithful // RIG-VERIFY transcriptions in avscuda_conditional_rig.cl
- * (device-run comparison mandatory); the float HISTOGRAM is deterministic
+ * faithful transcriptions in avscuda_conditional_rig.cl —
+ * // RIG-COMPARED 2026-10-28 (CUDA twin comparison done; handoff §8 filled);
+ * the float HISTOGRAM is deterministic
  * (pure per-lane index math + int atomics) and is verified here.
  *
  * Launch/host contracts (same file):

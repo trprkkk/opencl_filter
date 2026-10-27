@@ -195,9 +195,9 @@ kernel void ka_convert_from_float_u8(
     int y = (int)get_global_id(1);
     if (x >= width || y >= height) return;
     float max_val = (float)(255 << (tgt_bits - 8));
-    float half = (float)(128 << (tgt_bits - 8));
+    float halfc = (float)(128 << (tgt_bits - 8));  /* 'half' is an OpenCL C keyword */
     float s = src[x + y * src_pitch];
-    float tmp = (chroma != 0) ? (s * max_val + half + 0.5f)
+    float tmp = (chroma != 0) ? (s * max_val + halfc + 0.5f)
                               : (s * max_val + 0.5f);
     float c = (tmp <= max_val) ? ((tmp >= 0.0f) ? tmp : 0.0f) : max_val;
     dst[x + y * dst_pitch] = (uchar)(int)c;
@@ -212,9 +212,9 @@ kernel void ka_convert_from_float_u16(
     int y = (int)get_global_id(1);
     if (x >= width || y >= height) return;
     float max_val = (float)(255 << (tgt_bits - 8));
-    float half = (float)(128 << (tgt_bits - 8));
+    float halfc = (float)(128 << (tgt_bits - 8));  /* 'half' is an OpenCL C keyword */
     float s = src[x + y * src_pitch];
-    float tmp = (chroma != 0) ? (s * max_val + half + 0.5f)
+    float tmp = (chroma != 0) ? (s * max_val + halfc + 0.5f)
                               : (s * max_val + 0.5f);
     float c = (tmp <= max_val) ? ((tmp >= 0.0f) ? tmp : 0.0f) : max_val;
     dst[x + y * dst_pitch] = (ushort)(int)c;
@@ -236,9 +236,9 @@ kernel void ka_convert_to_float_from_u8(
     if (x >= width || y >= height) return;
     float max_val = (float)(255 << (src_bits - 8));
     float factor = 1.0f / max_val;
-    float half = (float)(128 << (src_bits - 8));
+    float halfc = (float)(128 << (src_bits - 8));  /* 'half' is an OpenCL C keyword */
     float v = (float)src[x + y * src_pitch];
-    dst[x + y * dst_pitch] = (chroma != 0) ? ((v - half) * factor)
+    dst[x + y * dst_pitch] = (chroma != 0) ? ((v - halfc) * factor)
                                            : (v * factor);
 }
 
@@ -252,8 +252,8 @@ kernel void ka_convert_to_float_from_u16(
     if (x >= width || y >= height) return;
     float max_val = (float)(255 << (src_bits - 8));
     float factor = 1.0f / max_val;
-    float half = (float)(128 << (src_bits - 8));
+    float halfc = (float)(128 << (src_bits - 8));  /* 'half' is an OpenCL C keyword */
     float v = (float)src[x + y * src_pitch];
-    dst[x + y * dst_pitch] = (chroma != 0) ? ((v - half) * factor)
+    dst[x + y * dst_pitch] = (chroma != 0) ? ((v - halfc) * factor)
                                            : (v * factor);
 }

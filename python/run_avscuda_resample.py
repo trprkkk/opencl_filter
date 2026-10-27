@@ -30,6 +30,29 @@ def F(v):
     return struct.unpack('f', struct.pack('f', v))[0]
 
 
+def sadd(a, b):
+    """float32 add with x86-SSE NaN ordering (ADDSS keeps the FIRST NaN).
+
+    CPython's float + returns the SECOND operand's NaN when both are NaN,
+    which diverges from hardware and from the C++ mirror on rows where two
+    NaNs meet.  Invalid-op results (0*inf, inf-inf) already yield the x86
+    indefinite -NaN in CPython, matching SSE."""
+    if math.isnan(a):
+        return F(a)
+    if math.isnan(b):
+        return F(b)
+    return F(a + b)
+
+
+def smul(a, b):
+    """float32 mul with hardware NaN ordering (MULSS keeps the NaN operand)."""
+    if math.isnan(a):
+        return F(a)
+    if math.isnan(b):
+        return F(b)
+    return F(a * b)
+
+
 def FB(v):
     return struct.unpack('i', struct.pack('f', v))[0]
 
@@ -214,7 +237,7 @@ def main():
                 for i in range(fs):
                     c = BF(coeff[yy * fs + i])
                     s = BF(src[xx + (offs[yy] + i) * sp])
-                    r = F(r + F(c * s))
+                    r = sadd(r, smul(c, s))
                 exp.append(FB(r))
         total += 1
         if not check("vplanf", got, exp, (tw, th, fs)):
@@ -290,7 +313,7 @@ def main():
                 for i in range(fs):
                     c = BF(coeff[e * fs + i])
                     s = BF(src[(offs[e] + i) + yy * sp])
-                    r = F(r + F(c * s))
+                    r = sadd(r, smul(c, s))
                 exp.append(FB(r))
         total += 1
         if not check("hplanf", got, exp, (twu, th, fs)):

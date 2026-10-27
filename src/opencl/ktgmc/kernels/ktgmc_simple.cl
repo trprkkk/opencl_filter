@@ -455,7 +455,7 @@ kernel void kt_lossless_proc(
     __global const PX* __restrict ya, int y_pitch,
     __global       PX* __restrict dst, int dst_pitch,
     int width, int height,
-    float half, float maxval)
+    float halfc, float maxval)   /* 'half' is an OpenCL C keyword: renamed */
 {
     int x = get_global_id(0);
     int y = get_global_id(1);
@@ -463,9 +463,9 @@ kernel void kt_lossless_proc(
         float vx = convert_float(xa[x + y * x_pitch]);
         float vy = convert_float(ya[x + y * y_pitch]);
         float v;
-        if ((vx - half) * (vy - half) < 0.f)
-            v = half;
-        else if (fabs(vx - half) < fabs(vy - half))
+        if ((vx - halfc) * (vy - halfc) < 0.f)
+            v = halfc;
+        else if (fabs(vx - halfc) < fabs(vy - halfc))
             v = vx;
         else
             v = vy;

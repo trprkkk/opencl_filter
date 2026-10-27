@@ -90,7 +90,13 @@ def build_resampling_program(source_size, crop_start, crop_size, target_size, b,
         if start_pos < 0: start_pos = 0
         off.append(start_pos)
         ok_pos = clamp(pos, 0.0, float(source_size - 1))
-        total = sum(mitf((start_pos + j - ok_pos) * filter_step, b, c) for j in range(fir))
+        # naive left-to-right accumulation: builtins.sum() is Neumaier
+        # compensated on CPython >= 3.12 and would diverge from the C++
+        # mirror's sequential total in the last ulp (the coefs feed a
+        # bit-exact compare).
+        total = 0.0
+        for j in range(fir):
+            total += mitf((start_pos + j - ok_pos) * filter_step, b, c)
         if total == 0.0: total = 1.0
         value = 0.0
         row = []
@@ -125,7 +131,10 @@ def build_gaussian_program(source_size, crop_start, crop_size, target_size, p):
         if start_pos < 0: start_pos = 0
         off.append(start_pos)
         ok_pos = clamp(pos, 0.0, float(source_size - 1))
-        total = sum(gf((start_pos + j - ok_pos) * filter_step) for j in range(fir))
+        # naive accumulation (see build_resampling_program note re sum())
+        total = 0.0
+        for j in range(fir):
+            total += gf((start_pos + j - ok_pos) * filter_step)
         if total == 0.0: total = 1.0
         value = 0.0
         row = []
@@ -523,7 +532,17 @@ def run_bits(bits):
             if roff!=goff: ok=False; print(f"  MISMATCH gprog_{tag}_offset")
             rcf=[float(l) for l in open(os.path.join(out_dir,f"gprog_{tag}_coef.txt"))]
             flat=[c for row in gcoef for c in row]
-            if rcf!=flat: ok=False; print(f"  MISMATCH gprog_{tag}_coef")
+            # cross-libm tolerance: the mirror and this golden call C pow on
+            # DIFFERENT libms on some rigs (here: mingw-w64 pow vs the
+            # interpreter's CRT pow), which may differ in the last double
+            # ulp.  The device only consumes the float-rounded coefs, so the
+            # f32 word table below stays bit-exact; allow 2 ulp in double.
+            def ulpdiff(a,b):
+                ia=struct.unpack('<q',struct.pack('<d',a))[0]
+                ib=struct.unpack('<q',struct.pack('<d',b))[0]
+                return abs(ia-ib)
+            if len(rcf)!=len(flat) or any(ulpdiff(a,b)>2 for a,b in zip(rcf,flat)):
+                ok=False; print(f"  MISMATCH gprog_{tag}_coef")
             rf32=[l.strip() for l in open(os.path.join(out_dir,f"gprog_{tag}_coef_f32.txt"))]
             gf32=[struct.pack(">f",c).hex() for c in flat]  # BE bytes == %08x word
             if rf32!=gf32: ok=False; print(f"  MISMATCH gprog_{tag}_coef_f32")

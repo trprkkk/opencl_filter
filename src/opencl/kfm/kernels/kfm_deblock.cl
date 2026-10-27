@@ -88,14 +88,15 @@
 #define S2   1.4142135623730951f    /* sqrt(2) */
 
 /* Per-quality list of `count` block offsets (Devblock.cu g_deblock_offset).
- * Index range used for a given quality is [count-1, 2*(count-1)]. */
-static const int g_offx[127] = {
+ * Index range used for a given quality is [count-1, 2*(count-1)].
+ * OpenCL requires program-scope const arrays to live in __constant. */
+__constant int g_offx[127] = {
   0,0,4, 0,2,6,4, 0,5,2,7,4,1,6,3, 0,4,1,5,3,7,2,6,0,4,1,5,3,7,2,6,
   0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,6,6,6,6,7,7,7,7,
   0,4,0,4,2,6,2,6,0,4,0,4,2,6,2,6,1,5,1,5,3,7,3,7,1,5,1,5,3,7,3,7,
   0,4,0,4,2,6,2,6,0,4,0,4,2,6,2,6,1,5,1,5,3,7,3,7,1,5,1,5,3,7,3,7,
 };
-static const int g_offy[127] = {
+__constant int g_offy[127] = {
   0,0,4, 0,2,4,6, 0,1,2,3,4,5,6,7, 0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,
   0,2,4,6,1,3,5,7,0,2,4,6,1,3,5,7,0,2,4,6,1,3,5,7,0,2,4,6,1,3,5,7,
   0,4,4,0,2,6,6,2,2,6,6,2,0,4,4,0,1,5,5,1,3,7,7,3,3,7,7,3,1,5,5,1,
@@ -258,10 +259,10 @@ kernel void kf_deblock(
         kf_hardthresh(d, thresh);
         kf_idct8x8(d);
 
-        int half = (1 << shift) >> 1;
+        int halfc = (1 << shift) >> 1;   /* 'half' is an OpenCL C keyword */
         for (int y = 0; y < 8; ++y) {
             for (int x = 0; x < 8; ++x) {
-                int tmp = (int)(d[x + y * 8] + (float)half) >> shift;
+                int tmp = (int)(d[x + y * 8] + (float)halfc) >> shift;
                 if (tmp < 0) tmp = 0; else if (tmp > maxv) tmp = maxv;
                 local_out[oy0 + y][ox0 + x] += tmp;
             }
@@ -390,8 +391,9 @@ kernel void kf_deblock_show(
 
 /* QP-block (qp>>3) -> sharpen-strength LUT (Deblock.cu d_sharpen_coeff /
  * g_sharpen_coeff, 30 entries; index >= 25 saturates to 255 in the kernel;
- * byte-verified by mechanical diff vs upstream d_/g_ copies). */
-static const uchar g_sharpen_coeff[30] = {
+ * byte-verified by mechanical diff vs upstream d_/g_ copies).
+ * OpenCL requires program-scope const arrays to live in __constant. */
+__constant uchar g_sharpen_coeff[30] = {
     0,   0,   0,   0,   0, // 0
     0,   0,   0,   0,  10, // 5(40)
    50,  90, 120, 150, 160, // 10(80)
@@ -506,8 +508,9 @@ kernel void kf_sharpen_coeff(
 /* Bayer-ordered dither matrix (Deblock.cu g_ldither[8][2], each an uchar4),
  * flattened per lane.  The scalar merge kernel indexes [y&7][(x>>2)&1][x&3]:
  * note the middle index runs over ushort4 columns, NOT scalar pixels;
- * byte-verified by mechanical diff vs upstream). */
-static const uchar g_ldither[8][2][4] = {
+ * byte-verified by mechanical diff vs upstream).
+ * OpenCL requires program-scope const arrays to live in __constant. */
+__constant uchar g_ldither[8][2][4] = {
   { {  0,  48,  12,  60 }, {  3,  51,  15,  63 } },
   { { 32,  16,  44,  28 }, { 35,  19,  47,  31 } },
   { {  8,  56,   4,  52 }, { 11,  59,   7,  55 } },

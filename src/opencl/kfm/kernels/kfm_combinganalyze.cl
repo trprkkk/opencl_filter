@@ -192,16 +192,16 @@ kernel void kf_bilinear_h(
     int width, int height, int dpitch,
     __global const uchar* __restrict src, int spitch, int scale, int shift)
 {
-    int half = scale / 2;
+    int halfc = scale / 2;   /* 'half' is an OpenCL C keyword: renamed */
     int x = (int)get_global_id(0);
     int y = (int)get_global_id(1);
     if (x < width && y < height) {
-        int x0 = (x - half) >> shift;
-        int c0 = ((x0 + 1) << shift) - (x - half);
+        int x0 = (x - halfc) >> shift;
+        int c0 = ((x0 + 1) << shift) - (x - halfc);
         int c1 = scale - c0;
         int s0 = (int)src[(x0 + 0) + y * spitch];
         int s1 = (int)src[(x0 + 1) + y * spitch];
-        dst[x + y * dpitch] = (uchar)((s0 * c0 + s1 * c1 + half) >> shift);
+        dst[x + y * dpitch] = (uchar)((s0 * c0 + s1 * c1 + halfc) >> shift);
     }
 }
 
@@ -210,16 +210,16 @@ kernel void kf_bilinear_v(
     int width, int height, int dpitch,
     __global const uchar* __restrict src, int spitch, int scale, int shift)
 {
-    int half = scale / 2;
+    int halfc = scale / 2;   /* 'half' is an OpenCL C keyword: renamed */
     int x = (int)get_global_id(0);
     int y = (int)get_global_id(1);
     if (x < width && y < height) {
-        int y0 = (y - half) >> shift;
-        int c0 = ((y0 + 1) << shift) - (y - half);
+        int y0 = (y - halfc) >> shift;
+        int c0 = ((y0 + 1) << shift) - (y - halfc);
         int c1 = scale - c0;
         int s0 = (int)src[x + (y0 + 0) * spitch];
         int s1 = (int)src[x + (y0 + 1) * spitch];
-        dst[x + y * dpitch] = (uchar)((s0 * c0 + s1 * c1 + half) >> shift);
+        dst[x + y * dpitch] = (uchar)((s0 * c0 + s1 * c1 + halfc) >> shift);
     }
 }
 

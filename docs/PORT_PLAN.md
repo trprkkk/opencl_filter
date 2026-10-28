@@ -120,8 +120,13 @@ CUDA-twin 239/239 tie axes, `rig/cuda_mv_tie_test.py`); the prepare pair
 run_mv_prepare pin retained).
 
 TODO (not yet ported, device-bound — see `docs/CODEX_HANDOFF.md`):
-the block-search driver kernels (`Search`, expanding/hex2, `dev_read_pixels`,
-`dev_calc_sad`, `MinCost`, `dev_reduce_result`) and the degrain / compensate
+~~the block-search driver kernels (`Search`, expanding/hex2, `dev_read_pixels`,
+`dev_calc_sad`, `MinCost`, `dev_reduce_result`)~~ — **DONE 2026-10-28**: ported
+as `kt_search_column` in `src/opencl/ktgmc/kernels/ktgmc_search.cl`
+(**ALG-VERIFIED** on device, `rig/dev_ktgmc_search.py`; golden
+`python/run_mv_search.py` 81 cases; CPU mirror `sim/ktgmc_search_ref.cpp`;
+`docs/BLOCKSEARCH_MODEL.md` §8b/§8c resolved via host-side column
+serialisation) — and the degrain / compensate
 host wiring (`kl_prepare_degrain`, `kl_degrain_2x3`, `kl_prepare_compensate`,
 `kl_compensate_2x3`), plus the MV.cpp host state machine.  Their *integer math*
 is now covered: the ALG-VERIFIED `kt_degrain_patch` + `kt_overlap_out`
@@ -164,9 +169,9 @@ To get a working deinterlacer you must port the mvtools-equivalent layers:
 2. **Analysis** (`KMAnalyse`, `kl_calculate_sad`, block search, temporal/vector
    prediction, scene-change detection, `dev_reduce` block reductions → OpenCL
    `barrier`/local reduce). — **frame-level SAD started** (`kt_plane_sad`,
-   validated); the block-level SAD (`dev_calc_sad`, warp reductions, `load4pix`)
-   and the block *search* (expanding / hex2 diamond) remain and are
-   architecture-layout-specific (see note ² above).
+   validated); the block-level SAD (`kt_calc_all_sad`) and the block *search*
+   (`kt_search_column`, 2026-10-28) are now ported and **ALG-VERIFIED**;
+   scene-change detection is ported (`kt_scene_change`/`_x2`).
 3. **Compensation / Degrain** (`KMCompensate`, `kl_compensate_2x3`,
    `kl_degrain_2x3`, `kl_prepare_*`).
 4. **Assembly** — the QTGMC AVS script wires individual `KTGMC_*`/`K*` filters

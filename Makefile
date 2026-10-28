@@ -22,6 +22,7 @@ test: ref lint
 	python3 python/run_mv_interp.py
 	python3 python/run_mv_mean.py
 	python3 python/run_mv_searchprep.py
+	python3 python/run_mv_search.py
 	python3 python/run_mv_io.py
 	python3 python/run_mv_rb2b.py
 	python3 python/run_mv_rb2b_pad.py

@@ -47,7 +47,12 @@ def golden(par, vecs):
             dymin = -nPel * (Y - nPad + npad_s)
             p1 = -2
             if bx > 0:
-                p1 = blkIdx - 1 + nBlk
+                # ANALYZE_SYNC=1 (shipped): left predictor = FRESH own-region
+                # neighbour.  Corrected 2026-10-28 from the copy-region
+                # spelling (blkIdx - 1 + nBlk, the ANALYZE_SYNC=0 alternative)
+                # after the CUDA twin measurement (cuda_search/
+                # SEARCH_MEASURE_REPORT.md §3); see BLOCKSEARCH_MODEL.md §8b.
+                p1 = blkIdx - 1
             pp2 = -2
             if by > 0:
                 pp2 = blkIdx - nBlkX

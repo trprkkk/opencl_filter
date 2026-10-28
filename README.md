@@ -120,16 +120,27 @@ Makefile                       # make test  (no OpenCL required)
   MVKernel.cu, which also exposed two ABI bugs in the port (`vectors` is
   `short2`, not `int2`; `out` is a packed 12-byte `VECTOR`, not `int3`) —
   see `docs/BLOCKSEARCH_MODEL.md` §8a.
+  The full `CPU_EMU=true` block-search driver is ported 2026-10-28 as
+  `kt_search_column` in `src/opencl/ktgmc/kernels/ktgmc_search.cl`
+  (**ALG-VERIFIED**, device: `rig/dev_ktgmc_search.py` — golden E2E over
+  BS 8/16/32 × SEARCH 1/2 × NPEL × chroma, both PX, plus an 8-config
+  three-way vs the Python golden and the stage-1 CUDA twin dumps; off-device:
+  golden runner `python/run_mv_search.py`, 81 cases, CPU mirror
+  `sim/ktgmc_search_ref.cpp`; `docs/BLOCKSEARCH_MODEL.md` §8b/§8c resolved —
+  the `prog`/`next` work-steal handshake is replaced by host-side column
+  serialisation).
   `kt_prepare_degrain` / `kt_prepare_compensate` are ported in
   `ktgmc_motion.cl` (`// RIG-VERIFY`; graduated 2026-10-28 from the deleted
   quarantine `ktgmc_degrain_rig.cl`, byte-identical): they produce
   the flat per-block offset/weight arrays that the ALG-VERIFIED
   `kt_degrain_patch` consumes, closing the `docs/MV_PORT_SPEC.md` §6.2 seam,
   with their arithmetic pinned by `python/run_mv_prepare.py` (240 cases).
-  **RIG-VERIFY** (device run pending): frame padding / mirror copy,
-  and the block-search pure helpers; `kt_most_freq_mv` is **ALG-VERIFIED**
+  **RIG-VERIFY** (device run pending): frame padding / mirror copy
+  (`kt_copy_pad`, `kt_pad_frame_h/v`) and `kt_init_scene_change`; the
+  block-search pure helpers and the whole search driver are now covered by
+  `kt_search_column` (**ALG-VERIFIED**, above). `kt_most_freq_mv` is **ALG-VERIFIED**
   (staged-fold tie-break, CUDA-twin 239/239 tie axes — `rig/cuda_mv_tie_test.py`).
-  The remaining search / degrain-block /
+  The remaining degrain-block /
   compensate kernels need the MV.cpp host state machine + super-frame sub-pel
   layout (see `docs/MV_PORT_SPEC.md`, `docs/CODEX_HANDOFF.md`).
 - `kfm_deband.cl`: **KFM KDeband core** — `kf_deband_reduce_banding`, faithful to

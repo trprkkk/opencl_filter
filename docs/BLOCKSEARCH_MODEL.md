@@ -152,9 +152,8 @@ candidate predictors (zero/global/own/left/up/median), running
 the lowest-cost `CostResult` (`dev_reduce_result<…,CPU_EMU=true>` serial scan),
 then writes the winning `short2` back to `vectors[blky*nBlkX+blkx]`, fences, and
 publishes progress with `atomicExch(&prog[blkx], blky)` for the ANALYZE_SYNC=1
-dependency wait. Porting this is
-the remaining large work and is strictly `RIG-VERIFY` (device-dependent for
-validation, but deterministic under CPU_EMU=true).
+dependency wait. **(2026-10-28: ported and ALG-VERIFIED — §8b/§8c below,
+`MV_PORT_SPEC.md` §6.)**
 
 ## 8. What is captured vs. what still blocks a faithful `kl_search`
 
@@ -193,23 +192,38 @@ are now settled *for this kernel* by reading the source, and
 
 ### 8b. STILL blocking `kl_search`
 
-1. **Predictor slot layout.** The sentinel (`[-2]/[-1]`) and appended copy
-   region (`+nBlkX*nBlkY`) convention, and `vectorsPitch`, still have to be
-   pinned for the `REF_VECTOR_INDEX[0..5]` (= `data[4..9]`) reads that
-   resolve `median(left, up, bottom-right)` and the own/left/up MVs. §8a
-   settles only the *direct* `[bx + by*nBlkX]` access.
-2. **Batch / work-stealing mapping to OpenCL.** CUDA launches one block per
-   batch column (`blocks(batch, min(nBlkX,nBlkY))`) that work-steals columns
-   via `atomicAdd(next, 1)` and spin-waits on `prog[]` for the
-   `ANALYZE_SYNC=1` left-column dependency. Reproducing this needs an
-   OpenCL host that either serialises columns in dependency order or
-   emulates the spin/atomic handshake — a host-side decision, not a kernel
-   transliteration.
+**RESOLVED (2026-10-28, stage-2 port; see `MV_PORT_SPEC.md` §6 and
+`HOST_CONTRACT.md` §3 Program C).** `kt_search_column`
+(`src/opencl/ktgmc/kernels/ktgmc_search.cl`) is ALG-VERIFIED
+(`rig/dev_ktgmc_search.py`: golden E2E + CUDA-twin three-way, both PX):
 
-Both remaining items are host/layout questions that a device bring-up
-(`docs/HOST_CONTRACT.md`) will answer empirically.
+1. **Predictor slot layout.** Pinned as int2 with `vectorsPitch = 4 +
+   2*nBlkX*nBlkY`: per row, `alloc[0..1]` reserved, `alloc[2]` = zero
+   sentinel (slot -2), `alloc[3]` = globalMV*nPel sentinel (slot -1), own
+   region at element 4, appended copy region at `4 + nBlkX*nBlkY`. All
+   `REF_VECTOR_INDEX` reads resolve to non-negative elements of the passed
+   allocation, sidestepping this driver's broken negative sub-relative
+   offsets (see §9 / `probe_subneg.py`). Sentinels are host-written (the
+   device `kt_init_const_vec` writes at negative sub-relative offsets and is
+   dropped by this driver; its arithmetic is verified in
+   `rig/dev_ktgmc_motion.py` S13).
+2. **Batch / work-stealing mapping to OpenCL.** The upstream dynamic
+   handshake is replaced by a deliberate correctness-first host decision:
+   one work-item per (batch, blkx) walks blky serially inside the kernel,
+   and the host enqueues the columns in ascending order on the in-order
+   queue — reproducing the `ANALYZE_SYNC=1` dependency without atomics,
+   spin-waits, or the `prog`/`next` handshake (those buffers are accepted
+   but ignored as scheduling-only). With one work-item per column there is
+   no intra-kernel concurrency to fence.
 
 ### 8c. This mechanism is actively in flux upstream — do not guess it
+
+**RESOLVED (2026-10-28):** by not porting the mechanism at all — the OpenCL
+host serialises columns in dependency order (see §8b.2), so the
+flip-flopping atomic/spin handshake has no ported counterpart. If the pin
+moves and the *semantics* of the `ANALYZE_SYNC=1` dependency itself change
+(not just its implementation), §8b.2's host mapping must be re-checked;
+the kernel's per-block arithmetic and §5's helpers are unaffected.
 
 The synchronisation described in 8b.2 is the part of the codebase upstream
 has been changing most recently, which is a further argument for porting it

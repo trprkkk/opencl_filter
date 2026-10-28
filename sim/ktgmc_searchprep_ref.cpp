@@ -37,7 +37,10 @@ int main(int argc,char**argv){
         int nDyMax=nPel*(nExtendedHeight-Y-nBlkSize-nPad+nPaddingScaled)-1;
         int nDxMin=-nPel*(X-nPad+nPaddingScaled);
         int nDyMin=-nPel*(Y-nPad+nPaddingScaled);
-        int p1=-2; if(bx>0) p1=blkIdx-1+nBlkX*nBlkY;
+        int p1=-2; if(bx>0) p1=blkIdx-1; /* ANALYZE_SYNC=1 fresh own-region left
+                                            (corrected 2026-10-28 from the
+                                            copy-region SYNC=0 spelling; see
+                                            SEARCH_MEASURE_REPORT.md §3) */
         int pp2=-2; if(by>0) pp2=blkIdx-nBlkX; else pp2=p1;
         int p3=-2; if((by<nBlkY-1)&&(bx<nBlkX-1)) p3=blkIdx+nBlkX+1+nBlkX*nBlkY;
         int d[12]; d[0]=nDxMax;d[1]=nDyMax;d[2]=nDxMin;d[3]=nDyMin;

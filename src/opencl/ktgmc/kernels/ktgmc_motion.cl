@@ -458,8 +458,9 @@ kernel void kt_mean_global_mv(
  *        nDxMax/nDyMax/nDxMin/nDyMin block-search bounds into data[0..3];
  *        predictor slot indices data[4..9] (sentinel -2=zero-vector, -1=global,
  *        data[6]=blkIdx current, data[7..9]=left/up/bottom-right neighbours,
- *        where left & bottom-right reference the prior-level COPY region offset
- *        +nBlkX*nBlkY and up references the current (already-searched) neighbour);
+ *        where left (ANALYZE_SYNC=1, shipped) and up reference the CURRENT
+ *        own region (both read FRESH by the search) and bottom-right
+ *        references the prior-level COPY region;
  *        data[10..11]=pred = this block's coarse-level MV (copied to vectors_copy);
  *        dataf[0..3]=penalties, dataf[4]=lambda (0 on row 0).
  *      The CUDA SearchBlock (data[12]+dataf[5]) is passed here as two flat int
@@ -512,8 +513,19 @@ kernel void kt_prepare_search(
         data[3] = nDyMin;
 
         int p1 = -2;            /* -2 -> zero vector */
-        if (bx > 0)             /* ANALYZE_SYNC == 1 */
-            p1 = blkIdx - 1 + nBlkX * nBlkY;   /* copy-region (prior-level) left */
+        if (bx > 0)             /* ANALYZE_SYNC == 1 (shipped default) */
+            p1 = blkIdx - 1;   /* FRESH own-region left neighbour.
+                                   CORRECTED 2026-10-28 (stage-2 port): the
+                                   CUDA twin measurement (cuda_search/
+                                   SEARCH_MEASURE_REPORT.md §3, verbatim
+                                   MVKernel.cu:1042-1045) showed the shipped
+                                   ANALYZE_SYNC=1 build points the left
+                                   predictor at the own region (blkIdx-1),
+                                   read FRESH during the search; the previous
+                                   port spelling (blkIdx-1+nBlkCount, the
+                                   copy region) is the ANALYZE_SYNC=0
+                                   alternative.  See
+                                   docs/BLOCKSEARCH_MODEL.md §8b. */
 
         int p2 = -2;
         if (by > 0)

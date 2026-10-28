@@ -94,6 +94,23 @@ global size; each kernel also guards `x<… && y<…`.
 | `kt_overlap_out` | 2D `(width,height)` | src:PX* `src_pitch`, patch:PX* `patch_stride`, `nBlkX,nBlkY,nBlkSize,stepX,stepY,overlapX,overlapY`, winBase:`short*` `win_stride`, `width,height`, dst:PX* `dst_pitch` | feathered Overlaps_C + Short2Bytes per output pixel + edge src copy. ALG-VERIFIED math. |
 | `kt_init_const_vec` | 2D `(2, nRows)` | vectors:`int2*`,`vectorsPitch`, globalMV:`const int2*`, `nPel` | slot `-2`=(0,0) if gid0==0 else slot `-1`=globalMV·nPel at row base. Host must leave 2 sentinel slots before each row. |
 
+### Program C — `ktgmc_search.cl`
+
+Ported 2026-10-28 (see `docs/MV_PORT_SPEC.md` §6 and
+`docs/BLOCKSEARCH_MODEL.md` §8b for the layout/handshake resolutions):
+
+| kernel | grid | args (order) | notes |
+|---|---|---|---|
+| `kt_search_column` | 1D `(1,)` per (batch, blkx), host-enqueued for blkx = 0..nBlkX-1 in ascending order on an in-order queue | pSrcY, pSrcU, pSrcV, pRefY, pRefU, pRefV: PX planes (**full plane buffers**, no sub-buffers — every read stays in bounds since MVs are clipped), vectors: `int2*` (the **full per-batch ALLOCATION**, pitch `4+2n`: sentinels at row elements 2/3, own at 4, copy region at 4+n — all `REF_VECTOR_INDEX` reads resolve to non-negative elements), dst_data: `int*` (stride 12/blk), dst_dataf: `int*` (stride 5/blk), `blkx,nBlkX,nBlkY,nPad,BLK_SIZE,SEARCH,NPEL,chroma,nPitchY,nPitchUV,nImgPitchY,nImgPitchUV` | one work-item walks blky serially inside; `prog`/`next` handshake intentionally dropped (host serialises columns). **ALG-VERIFIED** (`rig/dev_ktgmc_search.py`: golden E2E + CUDA-twin three-way). |
+
+Host responsibilities for this Program C call, per batch:
+sentinels (`vectors[row+2]=0`, `vectors[row+3]=(globalMV.x·nPel,
+globalMV.y·nPel)`) are **host-written** — dispatching `kt_init_const_vec`
+through a row-base sub view writes at negative sub-relative offsets, which
+this driver drops (its arithmetic is verified in `rig/dev_ktgmc_motion.py`
+S13) — then `kt_prepare_search` (Program B), then the ordered
+`kt_search_column` dispatches.
+
 ### Program A — `ktgmc_simple.cl`
 
 25 per-plane kernels (see `docs/MV_PORT_SPEC.md` §6 for the list). All are 2D
@@ -119,12 +136,13 @@ Python golden (`sim/*_ref.cpp`, `python/run_*.py`). Start with:
 
 ## 5. Kernels intentionally NOT yet ported (deferred to full host assembly)
 
-The warp/shared `kl_search` block loop, and the two per-pixel accumulators
+**Update 2026-10-28:** the `kl_search` block loop is now ported as
+`kt_search_column` (Program C above, `docs/BLOCKSEARCH_MODEL.md` §8b/§8c
+resolved). Still not ported: the two per-pixel accumulators
 `kl_degrain_2x3` / `kl_compensate_2x3` (race-free only under the host's
 disjoint `(nPatternX, nPatternY, M)` dispatch, so they are defined by that
 launch pattern). These additionally require the `MV.cpp` host state machine +
-super-frame sub-pel layout and are out of scope of this bring-up doc (see
-`docs/BLOCKSEARCH_MODEL.md` §8b for the exact remaining items).
+super-frame sub-pel layout and are out of scope of this bring-up doc.
 
 The two per-block *prepare* kernels ARE ported as
 `kt_prepare_degrain` / `kt_prepare_compensate` in

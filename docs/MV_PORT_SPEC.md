@@ -135,7 +135,10 @@ per-plane KTGMC kernels.
   order-independent so a serial per-row accumulation matches exactly).
   The per-block search setup `kt_prepare_search` (search bounds, predictor
   slot indices, prior-level vector copy, penalties and the lambda schedule;
-  ANALYZE_SYNC=1) is ALG-VERIFIED (`run_mv_searchprep.py`, 300 cases).
+  ANALYZE_SYNC=1) is ALG-VERIFIED (`run_mv_searchprep.py`, 300 cases;
+  2026-10-28: prior-column read `p1` corrected to `blkIdx-1` — under
+  ANALYZE_SYNC=1 a block's own region stays FRESH, see kernel comment and
+  `python/run_mv_search.py`).
   The MV I/O quartet `kt_load_mv`, `kt_store_mv`, `kt_load_mv_batch` (the degrain
   / compensate per-batch split + out copy-through), `kt_init_const_vec` (split /
   recombine VECTOR int3 with the int2-vector + int-sad buffers; write the two
@@ -197,7 +200,25 @@ reduction geometry. Concretely, the unported set splits into:
   block kernel; cannot be validated standalone): `Search`, `dev_read_pixels`,
   `dev_expanding_search_1/2`, `dev_hex2_search_1`, `MinCost`,
   `dev_reduce_result`, `load4pix(_Aligned)`, and `kl_prepare_search`'s consumer
-  loop.
+  loop. **(2026-10-28: this set is now ported and verified** — the whole
+  `CPU_EMU=true` `Search` block loop lives in
+  `kt_search_column` (`src/opencl/ktgmc/kernels/ktgmc_search.cl`), one
+  work-item per (batch, column), host-enqueued in ascending column order on
+  the in-order queue (the `prog`/`next` work-steal handshake is replaced by
+  host serialisation; `docs/BLOCKSEARCH_MODEL.md` §8b/§8c). It is
+  **ALG-VERIFIED** on the device: `rig/dev_ktgmc_search.py` chains
+  `kt_prepare_search` → ordered `kt_search_column` → `kt_calc_all_sad` and
+  passes a 48-case golden E2E (both PX) plus an 8-config three-way
+  (device vs Python golden vs stage-1 CUDA twin dumps,
+  `cuda_search/out/*_C_search.txt` / `*_F_calc_sad.txt`); CPU mirror
+  `sim/ktgmc_search_ref.cpp` and golden runner `python/run_mv_search.py`
+  (81 cases) pin the same arithmetic off-device. Sentinel slots are
+  host-written in the E2E — `kt_init_const_vec` through a row-base sub view
+  hits this driver's broken negative sub-relative offsets; its arithmetic
+  itself is verified in `rig/dev_ktgmc_motion.py` S13. Note:
+  `kt_prepare_search`'s prior-column read `p1` was corrected to
+  `blkIdx-1` (ANALYZE_SYNC=1 leaves a block's own region FRESH) with a
+  dated comment in the kernel, mirror and golden.)
 - **Degrain / compensate block kernels** (need `DegrainBlockData`/`ArgData`
   super-frame pointers + MV arrays): `kl_prepare_degrain` and
   `kl_prepare_compensate` are ported as

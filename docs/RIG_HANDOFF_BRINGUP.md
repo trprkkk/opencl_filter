@@ -22,10 +22,10 @@ findings a rig must act on, and the order to do things in.
 
 ## 0. TL;DR
 
-- **168 OpenCL kernels** across 5 families: avscuda 43, kfm 63, ktgmc 50,
+- **169 OpenCL kernels** across 5 families: avscuda 43, kfm 63, ktgmc 51,
   masktools 6, nnedi3 6.
-- **32 verification runners** (`python/run_*.py`) + **32 CPU mirrors**
-  (`sim/*.cpp`) wired into `make test`. Current state: **33 PASS, 0 FAIL**;
+- **33 verification runners** (`python/run_*.py`) + **33 CPU mirrors**
+  (`sim/*.cpp`) wired into `make test`. Current state: **34 PASS, 0 FAIL**;
   `./lint/lint_opencl.sh` → **42 checks, 0 failures** (was 44 before the
   2026-10-28 deletions of the emptied `kfm_deblock_rig.cl` and of the
   graduated `ktgmc_degrain_rig.cl`; its two kernels now live in
@@ -54,7 +54,7 @@ order matters the goldens pin it deliberately. The method is described in
 |---|---|---|
 | AvsCUDA | `docs/AVSCUDA_PORT_SPEC.md` | ported; 2 Conditional kernels RIG-COMPARED |
 | KFM | `docs/KFM_PORT_SPEC.md` | ported; all Deblock kernels ALG-VERIFIED |
-| KTGMC | `docs/MV_PORT_SPEC.md`, `docs/BLOCKSEARCH_MODEL.md` | pixel kernels done; `kl_search` deferred |
+| KTGMC | `docs/MV_PORT_SPEC.md`, `docs/BLOCKSEARCH_MODEL.md` | pixel + MV kernels done; `kl_search` ported & device-verified 2026-10-28 |
 | masktools | `docs/MASKTOOLS_PORT_SPEC.md` | **complete, 5/5 CUDA kernels** |
 | NNEDI3 | `docs/NNEDI3_PORT_SPEC.md` | **complete, 6/6 CUDA kernels** |
 
@@ -231,6 +231,27 @@ one without the other, which is exactly why the two markers are separate.
 
 ## 4. The one big piece still unported: `kl_search`
 
+**UPDATE 2026-10-28: PORTED AND DEVICE-VERIFIED.** `kt_search_column`
+(`src/opencl/ktgmc/kernels/ktgmc_search.cl`) implements the whole
+`CPU_EMU=true` Search block loop; see `docs/BLOCKSEARCH_MODEL.md`
+§8b/§8c (both RESOLVED there), `docs/HOST_CONTRACT.md` §3 Program C, and
+the rig result in §9.1 below. Summary of the two host decisions:
+
+1. **Predictor slot layout** — pinned: int2 vectors with per-row pitch
+   `4 + 2*nBlkX*nBlkY`, sentinels at row elements 2 (zero) / 3
+   (globalMV·nPel), own region at 4, copy region at 4+n; every
+   `REF_VECTOR_INDEX` read resolves to a non-negative element of the passed
+   full-allocation buffer. Sentinels are host-written (§9.4 sub-negative
+   hazard).
+2. **Batch / work-stealing mapping** — the handshake is *not* ported: one
+   work-item per (batch, blkx) walks blky serially inside the kernel, and
+   the host enqueues columns in ascending order on the in-order queue.
+   `prog`/`next` are accepted as dummy buffers. Deterministic, portable,
+   and bit-exact against the CUDA twin (§9.1).
+
+The original text below is retained for the record of *why* it was gated
+this way:
+
 `docs/BLOCKSEARCH_MODEL.md` is the authoritative model. §8a records what
 the archaeology *settled* (`vectors` layout and ref-plane origin for the
 direct `[bx + by*nBlkX]` access — this is what let `kt_calc_all_sad`
@@ -272,7 +293,7 @@ directly (`python3 python/run_X.py`); they are independent and hermetic.
 | inventory/doc consistency | `lint/audit_inventory.py` | — |
 
 The remaining runners cover the AvsCUDA, KFM and KTGMC batches; `make test`
-runs all 32 plus the audit. `ls python/run_*.py` is the authoritative list,
+runs all 33 plus the audit. `ls python/run_*.py` is the authoritative list,
 and the audit fails if any runner is not wired in.
 
 ## 6. Ground truth and reproduction
@@ -286,7 +307,7 @@ and the audit fails if any runner is not wired in.
 - `third_party/grunt/` is vendored **verbatim** (not ported — GRunT has no
   CUDA). It has only ever been parse-checked, never compiled or linked;
   its README records the sha256s and the `AVISYNTH_SDK` build recipe.
-- Sandbox reproduction: `make test` (all 32 runners + the inventory audit)
+- Sandbox reproduction: `make test` (all 33 runners + the inventory audit)
   and `./lint/lint_opencl.sh`. Both are fast (~100 s and ~1 s) and hermetic —
   no network, no GPU.
 
@@ -346,13 +367,15 @@ anywhere here).
 | KFM Deblock | `rig/dev_kfm_deblock.py` (full report: `rig/REPORT_kfm_deblock.md`) | PASS — 28 / 1000, both PX, incl. constant-table byte-check, §5 layout E2E, rig-pair pins. Upstream-inherited behaviour documented, NOT fixed: `kf_deblock`'s overlapping-tile stores race at multiply-covered accumulator cells (upstream CUDA's atomicAdd is on-chip only); all single-writer cells bit-exact. |
 | KTGMC simple | `rig/dev_ktgmc_simple.py` | PASS — 27 / 1453, both PX (26 kernels; see §9.2 for the port bug). Plain-build FMA delta documented (resample_h 7 px / 34 cases, worst 1 px; error_adjust 71 px / 74, worst 23 px); f32-vs-f64 golden-model deltas documented, not judged; `kt_plane_sad` int32 wraparound pinned per `HOST_CONTRACT.md` §6.3. |
 | KTGMC motion + degrain rig | `rig/dev_ktgmc_motion.py` | PASS — 31 / 886, both PX: all 24 motion kernels (incl. the graduated `kt_prepare_degrain`/`kt_prepare_compensate` pair + the staged-fold `kt_most_freq_mv` tie-break rework, S14 = 24 tie cases) + seam encodings (offset0+weight0 unusable-ref, −1 scene-change sentinels) bit-exact vs the trusted goldens; 12-byte VECTOR / short2 buffer ABI confirmed (`HOST_CONTRACT.md`); `kt_calc_all_sad` group-grid/bid work-list semantics exercised; `kt_degrain_patch` + `kt_overlap_out` + wrap-pin PASS. |
+| KTGMC block search (`kl_search` port) | `rig/dev_ktgmc_search.py` | PASS — 4 / 112: 48-case golden E2E (chained `kt_prepare_search` → ordered `kt_search_column` → `kt_calc_all_sad`; BS 8/16/32 × SEARCH 1/2 × NPEL × chroma, flat-image tie-heavy second pass, both PX, multi-batch) + `kt_prepare_search` own→copy snapshot pin; plus an 8-config CUDA-twin three-way (device vs Python golden vs stage-1 twin dumps `cuda_search/out/*_C_search.txt` / `*_F_calc_sad.txt`, px=1) — dev-vs-twin and golden-vs-twin both exact, incl. pyr_lvl1_coarse. `pyr_lvl0_fine` skipped by design (interp prefill out of scope); probe config not result-bearing. Mutation-tested: lambda `+=`→`-=` caught 47/112; the prune `>=`→`>` mutant is equivalent by design (strict-`<` survivor update ⇒ pruned candidates can never win) — recorded per §7. |
 
-Global state after all of the above: `cl_compile_all.py` **42/42 builds**
-(was 46/46 before the 2026-10-28 deletions of the emptied
-`kfm_deblock_rig.cl` and of the graduated `ktgmc_degrain_rig.cl`);
-all 32 `python/run_*.py` **PASS** after commits
-41b4ec1 + 4936884. `kl_search` remains unported by design
-(`BLOCKSEARCH_MODEL.md` §8b host decisions) — unchanged, out of scope.
+Global state after all of the above: `cl_compile_all.py` **44/44 builds**
+(ktgmc_search.cl added 2026-10-28; was 42/42 after the deletions of the
+emptied `kfm_deblock_rig.cl` and of the graduated `ktgmc_degrain_rig.cl`);
+all 33 `python/run_*.py` **PASS** (run_mv_search.py added and wired into
+`make test` 2026-10-28; 81 cases) after commits
+41b4ec1 + 4936884. `kl_search` ported + device-verified 2026-10-28
+(§9.1, `rig/dev_ktgmc_search.py`; `BLOCKSEARCH_MODEL.md` §8b/§8c resolved).
 
 ### 9.2 Genuine port bugs found by the device runs (fixed + committed)
 

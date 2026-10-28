@@ -89,7 +89,7 @@ src/opencl/nnedi3/kernels/     # OpenCL kernel sources: NNEDI3 pad/prescreen/com
 src/opencl/ktgmc/kernels/      # OpenCL kernel sources: KTGMC motion/simple
 src/opencl/kfm/kernels/        # OpenCL kernel sources: KFM (deband/edgelevel/temporalnr/mergestatic/filterbase/noiseclip/deblock/deblock_rig .cl)
 src/opencl/avscuda/kernels/    # OpenCL kernel sources: AvsCUDA (merge/filters/convert/conditional/conditional_rig/resample)
-src/host/                      # OpenCL host harnesses (rig-only; need an ICD, not in make test)
+src/host/                      # OpenCL host harnesses + FIRST real AviSynth+ plugin (KEdgeLevelOCL, 2026-10-29; src/host/plugin/, see build_host_edgelevel.bat)
 third_party/grunt/             # verbatim upstream GRunT (CPU-only AviSynth plugin, no CUDA to port)
 sim/ktgmc_cpu_ref.cpp          # scalar CPU mirror of the kernels (validates logic)
 python/run_validation.py       # independent Python golden + cross-check harness
@@ -367,6 +367,20 @@ Expected output:
 - Add AviSynthNeo plugin glue (AviSynth host adaptation is separate from the
   kernels; see `docs/PORT_PLAN.md` §"AviSynth integration").
 - Optional: reintroduce 4-channel vectorization as a pure performance pass.
+
+## 2026-10-29 — first real AviSynth+ host plugin (KEdgeLevelOCL)
+
+`src/host/plugin/` now contains a loadable 64-bit AviSynth+ plugin
+(`kfm_edgelevel_avs.dll`, registers `KEdgeLevelOCL` / alias `KEdgeLevel`) that
+runs the ALG-VERIFIED `kfm_edgelevel.cl` kernels on an OpenCL device through
+`src/host/ocl_host.*`, replaying the upstream KEdgeLevel host pipeline
+(strengthening passes, repair ping-pong, to444/from444, show/ClearUV). Verified
+headless by `test_kfm_edgelevel.cpp` (real autoload via AviSynth+ 3.7.3, 6
+formats × 12 param cases + defaults + script-string; every plane pixel checked
+against an in-exe CPU reference): 79 cases / 144 frame checks / 0 failures.
+Build with `src/host/plugin/build_host_edgelevel.bat`. Documented deviations
+(subsampled GetUVFrame dims, interior-only repair dispatch with host-defined
+border ring, show+uv frame type) are listed in the plugin header.
 
 ## Licensing
 

@@ -271,6 +271,11 @@ The kernels here are pure `plane → plane` operations so they can be unit-teste
 with no AviSynth. When wiring up, follow the original classes' plane loop
 (`PLANAR_Y/U/V`, `uvSamePitch` short-circuit, `logUVx/logUVy` subsampling).
 
+2026-10-29: the first such plugin exists — `src/host/plugin/kfm_edgelevel_avs.cpp`
+(KEdgeLevelOCL, loadable AviSynth+ 3.7.3 DLL, verified headless 79/79 cases;
+see `src/host/plugin/build_host_edgelevel.bat` and the plugin header's
+documented deviations).
+
 ## 7. Licensing
 
 KTGMC-derived files follow the upstream **GPL** (per

@@ -44,6 +44,39 @@ if(WIN32)
   endif()
 endif()
 
+# --- Optional: KEdgeLevelOCL — first real AviSynth+ host plugin --------------
+# Windows-only (like the cl.exe recipe in src/host/plugin/build_host_edgelevel.bat):
+# builds the plugin DLL + its headless verification exe from the vendored
+# Khronos headers/loader-import-lib (Q:\Downloads\openclfilter\sdk\opencl) and
+# the AviSynth+ header (Q:\Downloads\openclfilter\sdk\avisynth.h).  The kernel
+# source is embedded at configure/build time by embed_cl.py.  Device-required
+# at run time, so no add_test.
+if(WIN32 AND OpenCL_FOUND AND AVISYNTH_INCLUDE_DIR)
+  find_package(Python3 QUIET COMPONENTS Interpreter)
+  set(KEL_PLUGIN_DIR ${CMAKE_SOURCE_DIR}/src/host/plugin)
+  set(KEL_CL_EMBEDDED ${KEL_PLUGIN_DIR}/kfm_edgelevel_cl.h)
+  if(Python3_FOUND)
+    add_custom_command(
+      OUTPUT ${KEL_CL_EMBEDDED}
+      COMMAND ${Python3_EXECUTABLE} ${KEL_PLUGIN_DIR}/embed_cl.py
+      DEPENDS ${CMAKE_SOURCE_DIR}/src/opencl/kfm/kernels/kfm_edgelevel.cl
+      WORKING_DIRECTORY ${KEL_PLUGIN_DIR}
+      COMMENT "Embedding kfm_edgelevel.cl")
+  endif()
+  add_library(kfm_edgelevel_avs SHARED
+              ${KEL_PLUGIN_DIR}/kfm_edgelevel_avs.cpp
+              src/host/ocl_host.cpp
+              ${KEL_CL_EMBEDDED})
+  target_include_directories(kfm_edgelevel_avs PRIVATE
+                             ${CMAKE_SOURCE_DIR}/src/host ${AVISYNTH_INCLUDE_DIR})
+  target_link_libraries(kfm_edgelevel_avs PRIVATE OpenCL::OpenCL)
+  set_target_properties(kfm_edgelevel_avs PROPERTIES CXX_STANDARD 17
+                        OUTPUT_NAME "kfm_edgelevel_avs")
+  add_executable(test_kfm_edgelevel ${KEL_PLUGIN_DIR}/test_kfm_edgelevel.cpp)
+  target_include_directories(test_kfm_edgelevel PRIVATE ${AVISYNTH_INCLUDE_DIR})
+  set_target_properties(test_kfm_edgelevel PROPERTIES CXX_STANDARD 17)
+endif()
+
 enable_testing()
 add_test(NAME ktgmc_validation
          COMMAND ${CMAKE_COMMAND} -E env

@@ -1,3 +1,7 @@
 build/
 __pycache__/
 *.raw
+src/host/plugin/build_host/
+*.obj
+build_out.txt
+src/host/plugin/kfm_edgelevel_cl.h

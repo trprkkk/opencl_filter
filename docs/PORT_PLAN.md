@@ -283,7 +283,15 @@ untouched). The third, same day — `kfm_deband_avs.cpp` (KDebandOCL: one
 `kf_deband_reduce_banding` launch per plane over one shared luma-dims XorShift
 rand stream, matching upstream `CreateDebandRandom`; 141/141 headless cases;
 one documented deviation — range > 127 throws instead of upstream's silent
-`char` truncation).
+`char` truncation). The fourth, same day — `kfm_mergestatic_avs.cpp`
+(KTemporalDiffOCL + KMergeStaticOCL, the two script-assemblable filters of
+upstream KFM/MergeStatic.cu, exact upstream signatures `"c"` / `"ccc"`;
+stateless cross-frame semantics — a clamped 5-frame `max-min` window and the
+60fps↔30fps `n>>1` coefficient blend; upstream KAnalyzeStatic stays a separate
+filter, its two kernels already ported and verified; 63/63 headless cases;
+documented deviations: `clamp(ref, 0, vi.num_frames)` upper bound fixed to
+`num_frames-1`, redundant pre-merge CopyFrame skipped, CUDA device-match check
+dropped).
 
 ## 7. Licensing
 

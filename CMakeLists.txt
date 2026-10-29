@@ -127,6 +127,33 @@ if(WIN32 AND OpenCL_FOUND AND AVISYNTH_INCLUDE_DIR)
   add_executable(test_kfm_deband ${KEL_PLUGIN_DIR}/test_kfm_deband.cpp)
   target_include_directories(test_kfm_deband PRIVATE ${AVISYNTH_INCLUDE_DIR})
   set_target_properties(test_kfm_deband PROPERTIES CXX_STANDARD 17)
+
+  # --- KTemporalDiffOCL + KMergeStaticOCL — fourth AviSynth+ host plugin
+  # (both filters of upstream KFM MergeStatic.cu; stateless cross-frame clip
+  # mapping, see the plugin header's state model) ----------------------------
+  set(KMS_CL_EMBEDDED ${KEL_PLUGIN_DIR}/kfm_mergestatic_cl.h)
+  if(Python3_FOUND)
+    add_custom_command(
+      OUTPUT ${KMS_CL_EMBEDDED}
+      COMMAND ${Python3_EXECUTABLE} ${KEL_PLUGIN_DIR}/embed_cl.py
+              ${CMAKE_SOURCE_DIR}/src/opencl/kfm/kernels/kfm_mergestatic.cl
+              ${KMS_CL_EMBEDDED} kfm_mergestatic_cl_src
+      DEPENDS ${CMAKE_SOURCE_DIR}/src/opencl/kfm/kernels/kfm_mergestatic.cl
+      WORKING_DIRECTORY ${KEL_PLUGIN_DIR}
+      COMMENT "Embedding kfm_mergestatic.cl")
+  endif()
+  add_library(kfm_mergestatic_avs SHARED
+              ${KEL_PLUGIN_DIR}/kfm_mergestatic_avs.cpp
+              src/host/ocl_host.cpp
+              ${KMS_CL_EMBEDDED})
+  target_include_directories(kfm_mergestatic_avs PRIVATE
+                             ${CMAKE_SOURCE_DIR}/src/host ${AVISYNTH_INCLUDE_DIR})
+  target_link_libraries(kfm_mergestatic_avs PRIVATE OpenCL::OpenCL)
+  set_target_properties(kfm_mergestatic_avs PROPERTIES CXX_STANDARD 17
+                        OUTPUT_NAME "kfm_mergestatic_avs")
+  add_executable(test_kfm_mergestatic ${KEL_PLUGIN_DIR}/test_kfm_mergestatic.cpp)
+  target_include_directories(test_kfm_mergestatic PRIVATE ${AVISYNTH_INCLUDE_DIR})
+  set_target_properties(test_kfm_mergestatic PROPERTIES CXX_STANDARD 17)
 endif()
 
 enable_testing()

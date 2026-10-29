@@ -407,6 +407,29 @@ an in-exe CPU reference): 141 cases / 256 frame checks / 0 failures. Build with
 `build_host_deband.bat`. One documented deviation (plugin header): range > 127
 throws instead of upstream's silent `char` truncation.
 
+Same day, the fourth host plugin: `kfm_mergestatic_avs.dll` registers
+`KTemporalDiffOCL` + `KMergeStaticOCL` (with the upstream `KTemporalDiff` /
+`KMergeStatic` names as aliases, exact upstream signatures `"c"` / `"ccc"`)
+and runs the ALG-VERIFIED `kfm_mergestatic.cl` kernels — `kf_compare_frames`
+for KTemporalDiff (stateless 5-frame `clamp(n-2+i)` window, per plane
+`max-min` temporal spread) and `kf_merge_static` for KMergeStatic (per plane
+`(coef*v30 + (128-coef)*v60 + 64) >> 7` over child(n), clip30(n>>1),
+sttclip(n>>1)); neither upstream class holds cross-frame state (the state
+model is documented in the plugin header, following the KTemporalNROCL
+precedent). Upstream's third MergeStatic.cu filter, KAnalyzeStatic, is
+deliberately not assembled here (its `kf_min_frames`/`kf_and_coefs` kernels
+are already ported and ALG-VERIFIED; its CompareFields/ExtendCoefs pipeline
+machinery is a later milestone, and `KMergeStatic` never instantiates it).
+Verified headless by `test_kfm_mergestatic.cpp` (6 formats x random/constant/
+scene-change sources, 8/16-bit, first-frame + 2-frame-clip clamping, flag
+coefficient corners 0/128, frame-count-mismatch rejection, script-string
+cases; every plane pixel vs an in-exe CPU reference): 63 cases / 242 frame
+checks / 0 failures. Build with `build_host_mergestatic.bat`. Documented
+deviations (plugin header): the off-by-one `clamp(ref, 0, vi.num_frames)`
+upper bound fixed to `num_frames - 1`, the redundant pre-merge CopyFrame
+skipped (scalar kernel writes every column), the CUDA-only device-match
+constructor check dropped.
+
 ## Licensing
 
 The ported kernels are derived from `rigaya/AviSynthCUDAFilters`, which is a fork

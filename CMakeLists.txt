@@ -101,6 +101,32 @@ if(WIN32 AND OpenCL_FOUND AND AVISYNTH_INCLUDE_DIR)
   add_executable(test_kfm_temporalnr ${KEL_PLUGIN_DIR}/test_kfm_temporalnr.cpp)
   target_include_directories(test_kfm_temporalnr PRIVATE ${AVISYNTH_INCLUDE_DIR})
   set_target_properties(test_kfm_temporalnr PROPERTIES CXX_STANDARD 17)
+
+  # --- KDebandOCL — third AviSynth+ host plugin (single-pass random-sampling
+  # debander; shared luma-dims XorShift rand stream, see the plugin header) --
+  set(KDB_CL_EMBEDDED ${KEL_PLUGIN_DIR}/kfm_deband_cl.h)
+  if(Python3_FOUND)
+    add_custom_command(
+      OUTPUT ${KDB_CL_EMBEDDED}
+      COMMAND ${Python3_EXECUTABLE} ${KEL_PLUGIN_DIR}/embed_cl.py
+              ${CMAKE_SOURCE_DIR}/src/opencl/kfm/kernels/kfm_deband.cl
+              ${KDB_CL_EMBEDDED} kfm_deband_cl_src
+      DEPENDS ${CMAKE_SOURCE_DIR}/src/opencl/kfm/kernels/kfm_deband.cl
+      WORKING_DIRECTORY ${KEL_PLUGIN_DIR}
+      COMMENT "Embedding kfm_deband.cl")
+  endif()
+  add_library(kfm_deband_avs SHARED
+              ${KEL_PLUGIN_DIR}/kfm_deband_avs.cpp
+              src/host/ocl_host.cpp
+              ${KDB_CL_EMBEDDED})
+  target_include_directories(kfm_deband_avs PRIVATE
+                             ${CMAKE_SOURCE_DIR}/src/host ${AVISYNTH_INCLUDE_DIR})
+  target_link_libraries(kfm_deband_avs PRIVATE OpenCL::OpenCL)
+  set_target_properties(kfm_deband_avs PROPERTIES CXX_STANDARD 17
+                        OUTPUT_NAME "kfm_deband_avs")
+  add_executable(test_kfm_deband ${KEL_PLUGIN_DIR}/test_kfm_deband.cpp)
+  target_include_directories(test_kfm_deband PRIVATE ${AVISYNTH_INCLUDE_DIR})
+  set_target_properties(test_kfm_deband PROPERTIES CXX_STANDARD 17)
 endif()
 
 enable_testing()

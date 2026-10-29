@@ -279,7 +279,11 @@ documented deviations). The second followed the same day —
 windowed over the clamped frame window, 116/116 headless cases; the 16-bit
 cases pinned that `kf_temporal_nr`'s `frame_stride` is an ELEMENT stride per
 the goldens, not the byte stride its `.cl` comment claims — host fixed, kernel
-untouched).
+untouched). The third, same day — `kfm_deband_avs.cpp` (KDebandOCL: one
+`kf_deband_reduce_banding` launch per plane over one shared luma-dims XorShift
+rand stream, matching upstream `CreateDebandRandom`; 141/141 headless cases;
+one documented deviation — range > 127 throws instead of upstream's silent
+`char` truncation).
 
 ## 7. Licensing
 

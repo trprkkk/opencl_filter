@@ -89,7 +89,7 @@ src/opencl/nnedi3/kernels/     # OpenCL kernel sources: NNEDI3 pad/prescreen/com
 src/opencl/ktgmc/kernels/      # OpenCL kernel sources: KTGMC motion/simple
 src/opencl/kfm/kernels/        # OpenCL kernel sources: KFM (deband/edgelevel/temporalnr/mergestatic/filterbase/noiseclip/deblock/deblock_rig .cl)
 src/opencl/avscuda/kernels/    # OpenCL kernel sources: AvsCUDA (merge/filters/convert/conditional/conditional_rig/resample)
-src/host/                      # OpenCL host harnesses + first real AviSynth+ plugins (KEdgeLevelOCL + KTemporalNROCL, 2026-10-29; src/host/plugin/, see build_host_edgelevel.bat / build_host_temporalnr.bat)
+src/host/                      # OpenCL host harnesses + first real AviSynth+ plugins (KEdgeLevelOCL + KTemporalNROCL + KDebandOCL, 2026-10-29; src/host/plugin/, see build_host_edgelevel.bat / build_host_temporalnr.bat / build_host_deband.bat)
 third_party/grunt/             # verbatim upstream GRunT (CPU-only AviSynth plugin, no CUDA to port)
 sim/ktgmc_cpu_ref.cpp          # scalar CPU mirror of the kernels (validates logic)
 python/run_validation.py       # independent Python golden + cross-check harness
@@ -394,6 +394,18 @@ Build with `build_host_temporalnr.bat`. It also surfaced a host-contract
 discrepancy in the `.cl` header comment (frame_stride is ELEMENT-stride per
 the goldens, not byte-stride — pinned by the 16-bit cases; kernel untouched,
 documented as plugin deviation 4).
+
+Same day, the third host plugin: `kfm_deband_avs.dll` (`KDebandOCL` / alias
+`KDeband`) runs the ALG-VERIFIED `kfm_deband.cl` debander
+(`kf_deband_reduce_banding`) — one reduce_banding launch per plane, one shared
+luma-dims XorShift rand stream (seed 0) exactly like upstream KDeband's
+`CreateDebandRandom`; the upstream KDeband class launches exactly one device
+kernel, so the ported kernel covers 100% of its pipeline. Verified headless by
+`test_kfm_deband.cpp` (6 formats × smooth/noisy/banded sources × 7 param sets
+incl. defaults and range 0/127, thresh 0/large boundaries; every plane pixel vs
+an in-exe CPU reference): 141 cases / 256 frame checks / 0 failures. Build with
+`build_host_deband.bat`. One documented deviation (plugin header): range > 127
+throws instead of upstream's silent `char` truncation.
 
 ## Licensing
 

@@ -154,6 +154,32 @@ if(WIN32 AND OpenCL_FOUND AND AVISYNTH_INCLUDE_DIR)
   add_executable(test_kfm_mergestatic ${KEL_PLUGIN_DIR}/test_kfm_mergestatic.cpp)
   target_include_directories(test_kfm_mergestatic PRIVATE ${AVISYNTH_INCLUDE_DIR})
   set_target_properties(test_kfm_mergestatic PROPERTIES CXX_STANDARD 17)
+
+  # --- KNoiseClipOCL — fifth AviSynth+ host plugin (8-bit-only src-vs-noise
+  # band-marker map; stateless, see the plugin header) -----------------------
+  set(KNC_CL_EMBEDDED ${KEL_PLUGIN_DIR}/kfm_noiseclip_cl.h)
+  if(Python3_FOUND)
+    add_custom_command(
+      OUTPUT ${KNC_CL_EMBEDDED}
+      COMMAND ${Python3_EXECUTABLE} ${KEL_PLUGIN_DIR}/embed_cl.py
+              ${CMAKE_SOURCE_DIR}/src/opencl/kfm/kernels/kfm_noiseclip.cl
+              ${KNC_CL_EMBEDDED} kfm_noiseclip_cl_src
+      DEPENDS ${CMAKE_SOURCE_DIR}/src/opencl/kfm/kernels/kfm_noiseclip.cl
+      WORKING_DIRECTORY ${KEL_PLUGIN_DIR}
+      COMMENT "Embedding kfm_noiseclip.cl")
+  endif()
+  add_library(kfm_noiseclip_avs SHARED
+              ${KEL_PLUGIN_DIR}/kfm_noiseclip_avs.cpp
+              src/host/ocl_host.cpp
+              ${KNC_CL_EMBEDDED})
+  target_include_directories(kfm_noiseclip_avs PRIVATE
+                             ${CMAKE_SOURCE_DIR}/src/host ${AVISYNTH_INCLUDE_DIR})
+  target_link_libraries(kfm_noiseclip_avs PRIVATE OpenCL::OpenCL)
+  set_target_properties(kfm_noiseclip_avs PROPERTIES CXX_STANDARD 17
+                        OUTPUT_NAME "kfm_noiseclip_avs")
+  add_executable(test_kfm_noiseclip ${KEL_PLUGIN_DIR}/test_kfm_noiseclip.cpp)
+  target_include_directories(test_kfm_noiseclip PRIVATE ${AVISYNTH_INCLUDE_DIR})
+  set_target_properties(test_kfm_noiseclip PROPERTIES CXX_STANDARD 17)
 endif()
 
 enable_testing()

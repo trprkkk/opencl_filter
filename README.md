@@ -430,6 +430,25 @@ upper bound fixed to `num_frames - 1`, the redundant pre-merge CopyFrame
 skipped (scalar kernel writes every column), the CUDA-only device-match
 constructor check dropped.
 
+Same day, the fifth host plugin: `kfm_noiseclip_avs.dll` (`KNoiseClipOCL` /
+alias `KNoiseClip`, exact upstream signature
+`"cc[nmin_y]i[range_y]i[nmin_uv]i[range_uv]i"`, defaults 1/128/1/128) runs the
+ALG-VERIFIED `kfm_noiseclip.cl` band-marker kernel (`kf_noise_clip`) — one
+launch per plane (Y with nmin_y/range_y, U/V with nmin_uv/range_uv):
+`out = dev_limitter((src - noise + 256) >> 1, nmin, range)` against a
+same-location `noise` clip, exactly upstream DecombeUCF.cu's KNoiseClip (whose
+class launches exactly one kernel, so the port covers 100% of its pipeline).
+The class is stateless (output n = f(child(n), noise(n)); state model in the
+plugin header). Verified headless by `test_kfm_noiseclip.cpp` (8-bit only, as
+upstream: YV12/YV16/YV24 x smooth/noisy/mixed/extremes-0/255 source pairs x 5
+param sets incl. defaults and nmin/range boundaries; every plane pixel vs an
+in-exe CPU reference; plus width/height %4, resolution-mismatch and 16-bit
+rejections, defaults-only/alias/script-string cases): 170 cases / 322 frame
+checks / 0 failures. Build with `build_host_noiseclip.bat`. Documented
+deviations (plugin header): the scalar OpenCL kernel is exact for any width
+but the upstream width/height %4 constructor checks are kept verbatim, plain
+pitch==width device planes, the CUDA device-match check dropped.
+
 ## Licensing
 
 The ported kernels are derived from `rigaya/AviSynthCUDAFilters`, which is a fork

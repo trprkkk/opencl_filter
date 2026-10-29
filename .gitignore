@@ -8,3 +8,4 @@ src/host/plugin/kfm_edgelevel_cl.h
 src/host/plugin/kfm_temporalnr_cl.h
 src/host/plugin/kfm_deband_cl.h
 src/host/plugin/kfm_mergestatic_cl.h
+src/host/plugin/kfm_noiseclip_cl.h

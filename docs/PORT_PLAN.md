@@ -291,7 +291,13 @@ stateless cross-frame semantics — a clamped 5-frame `max-min` window and the
 filter, its two kernels already ported and verified; 63/63 headless cases;
 documented deviations: `clamp(ref, 0, vi.num_frames)` upper bound fixed to
 `num_frames-1`, redundant pre-merge CopyFrame skipped, CUDA device-match check
-dropped).
+dropped). The fifth, same day — `kfm_noiseclip_avs.cpp` (KNoiseClipOCL: one
+`kf_noise_clip` launch per plane, `dev_limitter((src-noise+256)>>1, nmin,
+range)` against a same-resolution noise clip; 8-bit only upstream; the class
+is stateless and launches exactly one kernel — 100% coverage; 170/170 headless
+cases over YV12/YV16/YV24 source pairs incl. extremes 0/255; documented
+deviations: upstream width/height %4 checks kept although the scalar kernel is
+exact for any width, CUDA device-match check dropped).
 
 ## 7. Licensing
 

@@ -51,8 +51,11 @@
  * TemporalNRPtrs struct holding nframes separate input-plane pointers.  OpenCL
  * cannot take a runtime-count array of image args, so this kernel instead takes
  * the nframes planes packed contiguously in one buffer `frames`, plane i at
- * byte offset i*frame_stride (frame_stride = host-chosen stride between planes,
- * normally pitch*height of that plane).  Each plane is processed by its own
+ * ELEMENT offset i*frame_stride (frame_stride = host-chosen stride between
+ * planes in PX elements, normally pitch*height of that plane; element units
+ * because `frames` is typed __global const PX* — a byte stride would only
+ * work for PX=uchar and read plane 2i at 16-bit, pinned empirically
+ * 2026-10-29).  Each plane is processed by its own
  * launch with that plane's own width/height/pitch.  Per-pixel arithmetic is
  * identical to cpu_temporal_nr; only the pointer-array vs packed-frame host
  * layout differs (recorded in docs/KFM_PORT_SPEC.md).

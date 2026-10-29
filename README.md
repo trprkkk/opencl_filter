@@ -89,7 +89,7 @@ src/opencl/nnedi3/kernels/     # OpenCL kernel sources: NNEDI3 pad/prescreen/com
 src/opencl/ktgmc/kernels/      # OpenCL kernel sources: KTGMC motion/simple
 src/opencl/kfm/kernels/        # OpenCL kernel sources: KFM (deband/edgelevel/temporalnr/mergestatic/filterbase/noiseclip/deblock/deblock_rig .cl)
 src/opencl/avscuda/kernels/    # OpenCL kernel sources: AvsCUDA (merge/filters/convert/conditional/conditional_rig/resample)
-src/host/                      # OpenCL host harnesses + FIRST real AviSynth+ plugin (KEdgeLevelOCL, 2026-10-29; src/host/plugin/, see build_host_edgelevel.bat)
+src/host/                      # OpenCL host harnesses + first real AviSynth+ plugins (KEdgeLevelOCL + KTemporalNROCL, 2026-10-29; src/host/plugin/, see build_host_edgelevel.bat / build_host_temporalnr.bat)
 third_party/grunt/             # verbatim upstream GRunT (CPU-only AviSynth plugin, no CUDA to port)
 sim/ktgmc_cpu_ref.cpp          # scalar CPU mirror of the kernels (validates logic)
 python/run_validation.py       # independent Python golden + cross-check harness
@@ -381,6 +381,19 @@ against an in-exe CPU reference): 79 cases / 144 frame checks / 0 failures.
 Build with `src/host/plugin/build_host_edgelevel.bat`. Documented deviations
 (subsampled GetUVFrame dims, interior-only repair dispatch with host-defined
 border ring, show+uv frame type) are listed in the plugin header.
+
+Same day, the second host plugin: `kfm_temporalnr_avs.dll`
+(`KTemporalNROCL` / alias `KTemporalNR`) runs the ALG-VERIFIED
+`kfm_temporalnr.cl` temporal noise reducer — the port's first temporal filter
+(stateless windowed over `clamp(n-dist+i)`, no persistent cross-frame state;
+state model documented in the plugin header). Verified headless by
+`test_kfm_temporalnr.cpp` (6 formats × random/constant/scene-change sources ×
+6 param sets, 8/16-bit, first-frame + heavy-boundary clamping; every plane
+pixel vs an in-exe CPU reference): 116 cases / 310 frame checks / 0 failures.
+Build with `build_host_temporalnr.bat`. It also surfaced a host-contract
+discrepancy in the `.cl` header comment (frame_stride is ELEMENT-stride per
+the goldens, not byte-stride — pinned by the 16-bit cases; kernel untouched,
+documented as plugin deviation 4).
 
 ## Licensing
 

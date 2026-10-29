@@ -5,3 +5,4 @@ src/host/plugin/build_host/
 *.obj
 build_out.txt
 src/host/plugin/kfm_edgelevel_cl.h
+src/host/plugin/kfm_temporalnr_cl.h

@@ -274,7 +274,12 @@ with no AviSynth. When wiring up, follow the original classes' plane loop
 2026-10-29: the first such plugin exists — `src/host/plugin/kfm_edgelevel_avs.cpp`
 (KEdgeLevelOCL, loadable AviSynth+ 3.7.3 DLL, verified headless 79/79 cases;
 see `src/host/plugin/build_host_edgelevel.bat` and the plugin header's
-documented deviations).
+documented deviations). The second followed the same day —
+`kfm_temporalnr_avs.cpp` (KTemporalNROCL, first temporal filter: stateless
+windowed over the clamped frame window, 116/116 headless cases; the 16-bit
+cases pinned that `kf_temporal_nr`'s `frame_stride` is an ELEMENT stride per
+the goldens, not the byte stride its `.cl` comment claims — host fixed, kernel
+untouched).
 
 ## 7. Licensing
 

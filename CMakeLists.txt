@@ -75,6 +75,32 @@ if(WIN32 AND OpenCL_FOUND AND AVISYNTH_INCLUDE_DIR)
   add_executable(test_kfm_edgelevel ${KEL_PLUGIN_DIR}/test_kfm_edgelevel.cpp)
   target_include_directories(test_kfm_edgelevel PRIVATE ${AVISYNTH_INCLUDE_DIR})
   set_target_properties(test_kfm_edgelevel PROPERTIES CXX_STANDARD 17)
+
+  # --- KTemporalNROCL — second AviSynth+ host plugin (temporal, stateless
+  # windowed over the child clip; see the plugin header's state model) -------
+  set(KTN_CL_EMBEDDED ${KEL_PLUGIN_DIR}/kfm_temporalnr_cl.h)
+  if(Python3_FOUND)
+    add_custom_command(
+      OUTPUT ${KTN_CL_EMBEDDED}
+      COMMAND ${Python3_EXECUTABLE} ${KEL_PLUGIN_DIR}/embed_cl.py
+              ${CMAKE_SOURCE_DIR}/src/opencl/kfm/kernels/kfm_temporalnr.cl
+              ${KTN_CL_EMBEDDED} kfm_temporalnr_cl_src
+      DEPENDS ${CMAKE_SOURCE_DIR}/src/opencl/kfm/kernels/kfm_temporalnr.cl
+      WORKING_DIRECTORY ${KEL_PLUGIN_DIR}
+      COMMENT "Embedding kfm_temporalnr.cl")
+  endif()
+  add_library(kfm_temporalnr_avs SHARED
+              ${KEL_PLUGIN_DIR}/kfm_temporalnr_avs.cpp
+              src/host/ocl_host.cpp
+              ${KTN_CL_EMBEDDED})
+  target_include_directories(kfm_temporalnr_avs PRIVATE
+                             ${CMAKE_SOURCE_DIR}/src/host ${AVISYNTH_INCLUDE_DIR})
+  target_link_libraries(kfm_temporalnr_avs PRIVATE OpenCL::OpenCL)
+  set_target_properties(kfm_temporalnr_avs PROPERTIES CXX_STANDARD 17
+                        OUTPUT_NAME "kfm_temporalnr_avs")
+  add_executable(test_kfm_temporalnr ${KEL_PLUGIN_DIR}/test_kfm_temporalnr.cpp)
+  target_include_directories(test_kfm_temporalnr PRIVATE ${AVISYNTH_INCLUDE_DIR})
+  set_target_properties(test_kfm_temporalnr PROPERTIES CXX_STANDARD 17)
 endif()
 
 enable_testing()

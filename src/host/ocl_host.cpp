@@ -243,4 +243,21 @@ void dispatch3D(Context& ctx, cl_kernel k, int x, int y, int z) {
           "clEnqueueNDRangeKernel(3D)");
 }
 
+void dispatch2DLocal(Context& ctx, cl_kernel k, int width, int height, int lx, int ly) {
+    dispatch2DLocalOffset(ctx, k, 0, 0, width, height, lx, ly);
+}
+
+void dispatch2DLocalOffset(Context& ctx, cl_kernel k, int x0, int y0,
+                           int width, int height, int lx, int ly) {
+    if (width <= 0 || height <= 0) return;  // empty interior
+    size_t off[2] = {(size_t)x0, (size_t)y0};
+    size_t g[2] = {
+        (size_t)((width + lx - 1) / lx * lx),
+        (size_t)((height + ly - 1) / ly * ly),
+    };
+    size_t l[2] = {(size_t)lx, (size_t)ly};
+    check(clEnqueueNDRangeKernel(ctx.queue(), k, 2, off, g, l, 0, nullptr, nullptr),
+          "clEnqueueNDRangeKernel(2D local)");
+}
+
 }  // namespace oclhost

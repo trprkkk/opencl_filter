@@ -175,5 +175,16 @@ void dispatch2D(Context& ctx, cl_kernel k, int width, int height);
 // (x,y) map to plane samples (x0+x, y0+y) through the plain index math.
 void dispatch2DOffset(Context& ctx, cl_kernel k, int x0, int y0, int width, int height);
 void dispatch3D(Context& ctx, cl_kernel k, int x, int y, int z);
+// Fixed-local-size dispatches for the reduction kernels whose __local tree
+// layout REQUIRES an exact work-group shape (the KFM 32x16 reduce family:
+// tid = lx + ly*32 over a fixed 512-slot buffer; local-size queries are
+// unreliable on this driver, but an EXPLICIT local size is honoured — the rig
+// harnesses launched these shapes hundreds of times, RIG_HANDOFF §9.4).
+// The global size is rounded UP to whole work-groups (OOB items contribute 0
+// through the width/height guards).
+void dispatch2DLocal(Context& ctx, cl_kernel k, int width, int height,
+                     int lx, int ly);
+void dispatch2DLocalOffset(Context& ctx, cl_kernel k, int x0, int y0,
+                           int width, int height, int lx, int ly);
 
 }  // namespace oclhost

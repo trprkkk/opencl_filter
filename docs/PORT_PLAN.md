@@ -312,6 +312,30 @@ builds force `-mfpmath=sse -msse2`: 32-bit x87 intermediates are not per-op
 float32); documented deviations in the plugin header, incl. zero-filled pad
 rows beyond h+16 — uninitialized (read) upstream).
 
+The seventh, 2026-10-31 — `kfm_analyze_avs.cpp` (the remaining KFM analysis /
+reduction filters of `CombingAnalyze.cu` + `DecombeUCF.cu` in one DLL:
+`KFMSuperOCL`, `KCleanSuperOCL`, `KPreCycleAnalyzeOCL`,
+`KPreCycleAnalyzeShowOCL`, `KContainsCombeOCL`, `KCombeMaskOCL`,
+`KRemoveCombeOCL`, `KCFieldDiffOCL`, `KCFrameDiffDupOCL`, `KAnalyzeNoiseOCL`,
+each with its exact upstream name as an alias/signature/defaults, over the
+ALG-VERIFIED `kfm_combinganalyze.cl` (15/15) + `kfm_filterbase.cl` +
+`kfm_decombeucf.cl` (8/8) kernels; the two `ConditionalFilter` helpers read
+`current_frame` like upstream `CFunc`; stateless classes — per-frame data from
+child/auxiliary clips, all device buffers per-call scratch; 65 headless cases /
+106092 checks, `run_kfm_combinganalyze.py` 2731 cases + `run_kfm_decombeucf.py`
+810 cases PASS; documented deviations: pair-packed uchar2 planes split into
+`.x`/`.y` buffers, interior-origin pointers expressed as global-work offsets
+over whole-buffer allocations (no sub-buffers on this driver), KCombeMask's
+separable bilinear as the exact upstream CPU twin in host staging (its
+pre-offset interior-origin pointers need a sub-buffer), KRemoveCombe runs
+upstream's own `cpu_remove_combe2` twin, the DecombeUCF ±2-row pad ring). Not
+assembled (documented with reasons in the plugin header): `KSwitchFlag` /
+`KFMSuperShow`, the `KTelecine*`/`KPatchCombe`/`KFMSwitch`/`KFMPad`/
+`KFMDecimate`/`AssumeDevice` KFMKernel.cu family (no ported `kfm_kernel.cl`),
+the `KDecombUCF*` host decision machinery (no device kernels) and
+`KAnalyzeStatic` (kernels ported; shifted-buffer chain formulation deferred).
+No implemented class requires GRunT.
+
 ## 7. Licensing
 
 KTGMC-derived files follow the upstream **GPL** (per

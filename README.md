@@ -19,7 +19,7 @@ buffers and dispatches them, with a scalar CPU reference used for validation.
 |---|---|---|
 | **KTGMC** | QTGMC-style deinterlacer (motion compensated) | In progress — **Milestone 1 done** (see below) |
 | KNNEDI3 | NNEDI3 neural-net upscaler | **complete — all 6 device kernels ALG-VERIFIED** (`src/opencl/nnedi3/`, `docs/NNEDI3_PORT_SPEC.md`) |
-| KFM | filter family (KDeband, Deblock, CombingAnalyze, …) | **KDeband/KEdgeLevel/KTemporalNR + MergeStatic/KAnalyzeStatic/KNoiseClip + KDeblock done** (all 11 Deblock.cu device kernels ALG-VERIFIED, incl. the sharpen pair graduated 2026-10-28) (`src/opencl/kfm/kernels/`) |
+| KFM | filter family (KDeband, Deblock, CombingAnalyze, …) | **KDeband/KEdgeLevel/KTemporalNR + MergeStatic/KNoiseClip + KDeblock + CombingAnalyze/DecombeUCF analysis done** (all 11 Deblock.cu device kernels ALG-VERIFIED, incl. the sharpen pair graduated 2026-10-28; the CombingAnalyze/DecombeUCF analysis kernels ALG-VERIFIED, seventh host plugin 2026-10-31) (`src/opencl/kfm/kernels/`) |
 | masktools | mask/LUT helper suite | **complete — all 5 CUDA kernels ALG-VERIFIED** (`src/opencl/masktools/`, `docs/MASKTOOLS_PORT_SPEC.md`) |
 | AvsCUDA | CUDA-aware dispatch + helpers | ported (18/18 families); 2 float reductions are rig-only (`docs/AVSCUDA_PORT_SPEC.md`) |
 | GRunT | AviSynth runtime helper | **no CUDA to port** — vendored verbatim at `third_party/grunt/` |
@@ -87,9 +87,9 @@ docs/PERF_NOTES.md             # static perf pass: work-group contracts, atomics
 src/opencl/masktools/kernels/  # OpenCL kernel sources: masktools fill/copy/LUT
 src/opencl/nnedi3/kernels/     # OpenCL kernel sources: NNEDI3 pad/prescreen/compute
 src/opencl/ktgmc/kernels/      # OpenCL kernel sources: KTGMC motion/simple
-src/opencl/kfm/kernels/        # OpenCL kernel sources: KFM (deband/edgelevel/temporalnr/mergestatic/filterbase/noiseclip/deblock/deblock_rig .cl)
+src/opencl/kfm/kernels/        # OpenCL kernel sources: KFM (deband/edgelevel/temporalnr/mergestatic/filterbase/combinganalyze/decombeucf/noiseclip/deblock/deblock_rig .cl)
 src/opencl/avscuda/kernels/    # OpenCL kernel sources: AvsCUDA (merge/filters/convert/conditional/conditional_rig/resample)
-src/host/                      # OpenCL host harnesses + first real AviSynth+ plugins (KEdgeLevelOCL + KTemporalNROCL + KDebandOCL, 2026-10-29; src/host/plugin/, see build_host_edgelevel.bat / build_host_temporalnr.bat / build_host_deband.bat)
+src/host/                      # OpenCL host harnesses + real AviSynth+ plugins (KEdgeLevelOCL, KTemporalNROCL, KDebandOCL, KTemporalDiffOCL+KMergeStaticOCL, KNoiseClipOCL, KDeblockOCL and the CombingAnalyze/DecombeUCF analysis family; src/host/plugin/, see build_host_*.bat)
 third_party/grunt/             # verbatim upstream GRunT (CPU-only AviSynth plugin, no CUDA to port)
 sim/ktgmc_cpu_ref.cpp          # scalar CPU mirror of the kernels (validates logic)
 python/run_validation.py       # independent Python golden + cross-check harness
@@ -478,6 +478,43 @@ needed), the deterministic kf_deblock split dispatch (upstream CUDA has a
 genuine write race there), host-staged pads and QP-table margin zero-fill,
 zero-filled pad rows beyond h+16 (uninitialized upstream), the fused
 SharpenFilter tail, and the documented kf_sharpen bilinear-vs-texture ±1 class.
+
+Same day, the seventh host plugin: `kfm_analyze_avs.dll` assembles the REMAINING
+KFM analysis/reduction filters of CombingAnalyze.cu + DecombeUCF.cu in one DLL,
+registering `KFMSuperOCL`, `KCleanSuperOCL`, `KPreCycleAnalyzeOCL`,
+`KPreCycleAnalyzeShowOCL`, `KContainsCombeOCL`, `KCombeMaskOCL`,
+`KRemoveCombeOCL`, `KCFieldDiffOCL`, `KCFrameDiffDupOCL` and `KAnalyzeNoiseOCL`
+(each with the exact upstream name as an alias and the exact upstream signature
+and defaults) around the ALG-VERIFIED `kfm_combinganalyze.cl` (15/15 kernels),
+`kfm_filterbase.cl` and `kfm_decombeucf.cl` (8/8) kernels. The two
+`ConditionalFilter` helpers (`KCFieldDiff` / `KCFrameDiffDup`) read
+`current_frame` exactly like upstream's `CFunc` and return the double. The
+classes are stateless (per-frame data from child/auxiliary clips; all device
+buffers are per-call scratch). Verified headless by `test_kfm_analyze.cpp`
+(YV12/YV16/YV24 (+YUV420P16/YUV444P16 for KRemoveCombe/KCFieldDiff/
+KCFrameDiffDup/KFMSuper), smooth/noisy/combed sources, parity both ways, th
+sweeps incl. boundaries, alias invocations, border-only KContainsCombe,
+staged+superclip KAnalyzeNoise, written-cell KFMSuper after the real core
+SeparateFields; every plane pixel/counter vs an in-exe CPU reference): 65 cases
+/ 106092 checks / 0 failures. The `run_kfm_combinganalyze.py` (2731 cases) and
+`run_kfm_decombeucf.py` (810 cases) goldens PASS. Build with
+`build_host_analyze.bat`. Documented deviations (plugin header): the pair-packed
+uchar2 frames are split into separate `.x`/`.y` planes (layout bookkeeping,
+bit-identical); interior-origin pointers expressed as global-work offsets over
+whole-buffer allocations (no sub-buffers on this driver, RIG_HANDOFF 9.4);
+KCombeMask's separable bilinear upscale runs as the exact upstream CPU twin in
+host staging (its `src-1row`/`dsttmp+1row` interior-origin pointer math needs a
+sub-buffer this driver cannot express); KRemoveCombe runs upstream's own
+`cpu_remove_combe2` twin; the DecombeUCF padded planes carry the +/-2-row ring
+the kernels tap; the `best` floor rule and blocksize-4 mapping of
+KCFrameDiffDup. Upstream registrations NOT implemented (documented, with
+reasons, in the plugin header): `KSwitchFlag`/`KFMSuperShow` (upstream host-side
+flag dims bug / debug-only visualiser), `KTelecine`/`KTelecineSuper`/
+`KPatchCombe`/`KFMSwitch`/`KFMPad`/`KFMDecimate`/`AssumeDevice` (no ported
+`kfm_kernel.cl`), the `KDecombUCF*` decision machinery (pure host, no device
+kernels) and `KAnalyzeStatic` (all kernels ported but its shifted-buffer chain
+formulation is deferred). No implemented KFM class requires GRunT script
+evaluation; the GRunT pairings only wrap the un-ported `KDecombUCF*` consumers.
 
 ## Licensing
 

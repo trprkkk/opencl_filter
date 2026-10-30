@@ -163,7 +163,12 @@ def run_mirror(nums):
 
 
 def main():
-    subprocess.run(["g++", "-O2", "-std=c++17", "-ffp-contract=off", "-w",
+    # -mfpmath=sse -msse2: the sim MUST be per-op float32 (the golden rounds
+    # every operation).  On 32-bit x87 toolchains (mingw32) intermediates keep
+    # 80-bit precision between ops, which shifts threshold/truncation
+    # boundaries and breaks bit-exactness — force SSE math.
+    subprocess.run(["g++", "-O2", "-std=c++17", "-ffp-contract=off",
+                    "-mfpmath=sse", "-msse2", "-w",
                     os.path.join(REPO, "sim", "kfm_deblock_ref.cpp"),
                     "-o", BIN], check=True)
     rng = random.Random(29)

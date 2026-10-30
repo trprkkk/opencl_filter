@@ -449,6 +449,36 @@ deviations (plugin header): the scalar OpenCL kernel is exact for any width
 but the upstream width/height %4 constructor checks are kept verbatim, plain
 pitch==width device planes, the CUDA device-match check dropped.
 
+Same day, the sixth host plugin: `kfm_deblock_avs.dll` (`KDeblockOCL` / alias
+`KDeblock`, exact upstream signature
+`"c[quality]i[str]f[thr]f[bratio]f[qpclip]c[qp]i[badap]b[sharp]b[show]i"`,
+defaults quality 3, str 0, thr 0, bratio = badap ? 2 : 0.5, qp -1, badap true,
+sharp false, show 0) assembles the full KFM Deblock.cu host pipeline around the
+ALG-VERIFIED `kfm_deblock.cl` kernels: `QPForDeblock` (props / qpclip /
+`KFM_SourceStart` frame mapping with `frameRateConv`, force_qp constant table,
+`kf_make_qp_table` with `b_ratio` DC blending and optional `DC_Table` masks),
+`KDeblock` (`kf_deblock` DCT + hard-threshold + IDCT over the
+`(w+15)>>3 x (h+15)>>3` parity-accumulator grid — the by=0 row launches first
+and by>=1 in a second in-order dispatch so the odd-bh parity-plane overlap
+resolves deterministically like upstream's CPU loop order — then
+`kf_merge_deblock` 4-parity-slice merge with ordered dither) and the
+`SharpenFilter` tail (`kf_sharpen_coeff` + `kf_sharpen` behind the real core
+GaussResize, chained exactly like upstream's Create). Mirror pads (MakeMask
+radius-5 box max and the DeblockPlane 8px pad) run as host staging (upstream's
+own CPU-fallback path does the same); show=1/2 text is drawn bit-exactly with
+the ported DrawText font. Verified headless by `test_kfm_deblock.cpp` (8-bit +
+16-bit x 6 formats x qpclip/props/force_qp/DC/sourceStart/show 0-3/sharp/alias
+sweeps incl. the 64x24 sharpen quirk config; every plane pixel vs an in-exe CPU
+reference): 137 cases / 268 frame checks / 0 failures; the three `run_kfm_deblock*`
+golden runners PASS (their sim builds now force `-mfpmath=sse -msse2` — 32-bit
+x87 intermediates are not per-op float32 and broke bit-exactness vs the
+golden). Build with `build_host_deblock.bat`. Documented deviations (plugin
+header): the accumulator origin/merge-offset bookkeeping (no +8 base offset
+needed), the deterministic kf_deblock split dispatch (upstream CUDA has a
+genuine write race there), host-staged pads and QP-table margin zero-fill,
+zero-filled pad rows beyond h+16 (uninitialized upstream), the fused
+SharpenFilter tail, and the documented kf_sharpen bilinear-vs-texture ±1 class.
+
 ## Licensing
 
 The ported kernels are derived from `rigaya/AviSynthCUDAFilters`, which is a fork

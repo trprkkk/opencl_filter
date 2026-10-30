@@ -297,7 +297,20 @@ range)` against a same-resolution noise clip; 8-bit only upstream; the class
 is stateless and launches exactly one kernel — 100% coverage; 170/170 headless
 cases over YV12/YV16/YV24 source pairs incl. extremes 0/255; documented
 deviations: upstream width/height %4 checks kept although the scalar kernel is
-exact for any width, CUDA device-match check dropped).
+exact for any width, CUDA device-match check dropped). The sixth, same day —
+`kfm_deblock_avs.cpp` (KDeblockOCL + `KDeblock` alias, the full KFM
+Deblock.cu assembly: QPForDeblock (props/qpclip/KFM_SourceStart mapping,
+force_qp constant table, `kf_make_qp_table` with DC blending), KDeblock
+(`kf_deblock` parity-accumulator DCT/threshold/IDCT — dispatched as by=0 row
+then by>=1 so the odd-bh parity-plane accumulator overlap resolves
+deterministically like upstream's CPU loop order, where upstream CUDA itself
+races — then `kf_merge_deblock`) and the SharpenFilter tail
+(`kf_sharpen_coeff` + `kf_sharpen` behind the real core GaussResize);
+mirror pads run as host staging; 137/137 headless cases over 8/16-bit x 6
+formats incl. show=0..3; the three `run_kfm_deblock*` goldens PASS (their sim
+builds force `-mfpmath=sse -msse2`: 32-bit x87 intermediates are not per-op
+float32); documented deviations in the plugin header, incl. zero-filled pad
+rows beyond h+16 — uninitialized (read) upstream).
 
 ## 7. Licensing
 

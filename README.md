@@ -17,7 +17,7 @@ buffers and dispatches them, with a scalar CPU reference used for validation.
 
 | Project | What it is | Port status here |
 |---|---|---|
-| **KTGMC** | QTGMC-style deinterlacer (motion compensated) | In progress — **Milestone 1 done** (see below) |
+| **KTGMC** | QTGMC-style deinterlacer (motion compensated) | In progress — **Milestone 1 done** (see below); all motion kernels ported & device-verified, and the first motion host plugin KMSuperOCL ships (2026-10-30) |
 | KNNEDI3 | NNEDI3 neural-net upscaler | **complete — all 6 device kernels ALG-VERIFIED** (`src/opencl/nnedi3/`, `docs/NNEDI3_PORT_SPEC.md`) |
 | KFM | filter family (KDeband, Deblock, CombingAnalyze, …) | **KDeband/KEdgeLevel/KTemporalNR + MergeStatic/KNoiseClip + KDeblock + CombingAnalyze/DecombeUCF analysis done** (all 11 Deblock.cu device kernels ALG-VERIFIED, incl. the sharpen pair graduated 2026-10-28; the CombingAnalyze/DecombeUCF analysis kernels ALG-VERIFIED, seventh host plugin 2026-10-31) (`src/opencl/kfm/kernels/`) |
 | masktools | mask/LUT helper suite | **complete — all 5 CUDA kernels ALG-VERIFIED** (`src/opencl/masktools/`, `docs/MASKTOOLS_PORT_SPEC.md`) |
@@ -89,7 +89,7 @@ src/opencl/nnedi3/kernels/     # OpenCL kernel sources: NNEDI3 pad/prescreen/com
 src/opencl/ktgmc/kernels/      # OpenCL kernel sources: KTGMC motion/simple
 src/opencl/kfm/kernels/        # OpenCL kernel sources: KFM (deband/edgelevel/temporalnr/mergestatic/filterbase/combinganalyze/decombeucf/noiseclip/deblock/deblock_rig .cl)
 src/opencl/avscuda/kernels/    # OpenCL kernel sources: AvsCUDA (merge/filters/convert/conditional/conditional_rig/resample)
-src/host/                      # OpenCL host harnesses + real AviSynth+ plugins (KEdgeLevelOCL, KTemporalNROCL, KDebandOCL, KTemporalDiffOCL+KMergeStaticOCL, KNoiseClipOCL, KDeblockOCL and the CombingAnalyze/DecombeUCF analysis family; src/host/plugin/, see build_host_*.bat)
+src/host/                      # OpenCL host harnesses + real AviSynth+ plugins (KEdgeLevelOCL, KTemporalNROCL, KDebandOCL, KTemporalDiffOCL+KMergeStaticOCL, KNoiseClipOCL, KDeblockOCL, the CombingAnalyze/DecombeUCF analysis family, and the KTGMC motion starter KMSuperOCL; src/host/plugin/, see build_host_*.bat)
 third_party/grunt/             # verbatim upstream GRunT (CPU-only AviSynth plugin, no CUDA to port)
 sim/ktgmc_cpu_ref.cpp          # scalar CPU mirror of the kernels (validates logic)
 python/run_validation.py       # independent Python golden + cross-check harness
@@ -515,6 +515,34 @@ flag dims bug / debug-only visualiser), `KTelecine`/`KTelecineSuper`/
 kernels) and `KAnalyzeStatic` (all kernels ported but its shifted-buffer chain
 formulation is deferred). No implemented KFM class requires GRunT script
 evaluation; the GRunT pairings only wrap the un-ported `KDecombUCF*` consumers.
+
+## 2026-10-30 — first KTGMC MOTION host plugin (KMSuperOCL)
+
+`src/host/plugin/ktgmc_super_avs.cpp` (`ktgmc_super_avs.dll`, registers
+`KMSuperOCL` with the upstream `KMSuper` name as alias and the exact upstream
+signature) is the first plugin of the KTGMC motion pipeline: it builds the
+super-sampled pyramid frame around the ALG-VERIFIED `ktgmc_simple.cl` /
+`ktgmc_motion.cl` kernels — the pel-upscale wiener pair
+(`kt_vertical_wiener`/`kt_horizontal_wiener`) for sharp levels, the
+separable/fused RB2B 1:2 downsamplers (`kt_rb2b_bilinear_filtered[_with_pad]`)
+for coarse levels, and the frame padding kernels (`kt_copy_pad` CUDA-reflection
+form), with the pyramid cached per source frame. Verified headless by
+`test_ktgmc_super.cpp` (real AviSynth+ 3.7.3 autoload; pel 1/2/4 x sharp
+on/off x rfilter variants x chroma on/off, P16 + 8-bit; every plane of the
+produced super frame vs an in-exe CPU reference; a replication-border mutation
+fails every case, so the reference discriminates): 33 cases / 31 frame checks
+/ 0 failures. Build with `build_host_super.bat` (embeds both `.cl`). The plugin
+uses the new SVM (`clSVMAlloc`) staging added to `src/host/ocl_host.*` for the
+pyramid buffers (the driver's interior sub-buffer origins are unreliable,
+RIG_HANDOFF 9.4). Documented deviations (plugin header): SVM pyramid buffers
+instead of interior sub-buffers, chroma=false output planes zero-filled
+(unread downstream; uninitialised upstream), tail columns beyond each level's
+extended width zero-filled, row-wise copy-back into the AVS pitch, and the
+CUDA-reflection border form. The KMAnalyse successor is inventoried but not
+assembled (its multi-level `GroupOfPlanes` host loop — lsad/badSAD scaling,
+lambda/plevel schedules, batch/caching, BGR32 vector-frame layout — needs either
+an extension of the `run_mv_search.py` one-Search-call assembly or a rig CUDA
+cross-check; recorded rather than shipping a speculative assembly).
 
 ## Licensing
 

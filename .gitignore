@@ -14,3 +14,5 @@ src/host/plugin/kfm_textout_font.h
 src/host/plugin/build_log.txt
 src/host/plugin/kfm_combinganalyze_cl.h
 src/host/plugin/kfm_decombeucf_cl.h
+src/host/plugin/ktgmc_motion_cl.h
+src/host/plugin/ktgmc_simple_cl.h

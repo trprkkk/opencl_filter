@@ -152,6 +152,41 @@ void Buffer::fill32(uint32_t pattern) const {
 }
 
 // ---------------------------------------------------------------------------
+// SvmBuffer (coarse-grain buffer SVM; see ocl_host.h)
+// ---------------------------------------------------------------------------
+SvmBuffer::SvmBuffer(Context& ctx, size_t bytes) : ctx_(ctx.context()), queue_(ctx.queue()), bytes_(bytes) {
+    p_ = clSVMAlloc(ctx_, CL_MEM_READ_WRITE, bytes, 0);
+    if (!p_) { bytes_ = 0; throw Error("clSVMAlloc(" + std::to_string(bytes) + " B) failed"); }
+}
+
+SvmBuffer::~SvmBuffer() {
+    if (p_) clSVMFree(ctx_, p_);
+}
+
+SvmBuffer& SvmBuffer::operator=(SvmBuffer&& o) noexcept {
+    if (this != &o) {
+        if (p_) clSVMFree(ctx_, p_);
+        ctx_ = o.ctx_; queue_ = o.queue_; p_ = o.p_; bytes_ = o.bytes_;
+        o.p_ = nullptr; o.bytes_ = 0; o.ctx_ = nullptr; o.queue_ = nullptr;
+    }
+    return *this;
+}
+
+void SvmBuffer::write(const void* host, size_t offset, size_t bytes) const {
+    check(clEnqueueSVMMap(queue_, CL_TRUE, CL_MAP_WRITE, (uint8_t*)p_ + offset, bytes,
+                          0, nullptr, nullptr), "clEnqueueSVMMap(W)");
+    memcpy((uint8_t*)p_ + offset, host, bytes);
+    check(clEnqueueSVMUnmap(queue_, (uint8_t*)p_ + offset, 0, nullptr, nullptr), "clEnqueueSVMUnmap(W)");
+}
+
+void SvmBuffer::read(void* host, size_t offset, size_t bytes) const {
+    check(clEnqueueSVMMap(queue_, CL_TRUE, CL_MAP_READ, (uint8_t*)p_ + offset, bytes,
+                          0, nullptr, nullptr), "clEnqueueSVMMap(R)");
+    memcpy(host, (uint8_t*)p_ + offset, bytes);
+    check(clEnqueueSVMUnmap(queue_, (uint8_t*)p_ + offset, 0, nullptr, nullptr), "clEnqueueSVMUnmap(R)");
+}
+
+// ---------------------------------------------------------------------------
 // Program
 // ---------------------------------------------------------------------------
 Program::Program(Context& ctx, const std::string& unit_name, const std::string& source,

@@ -336,6 +336,22 @@ the `KDecombUCF*` host decision machinery (no device kernels) and
 `KAnalyzeStatic` (kernels ported; shifted-buffer chain formulation deferred).
 No implemented class requires GRunT.
 
+The eighth, 2026-10-30 — `ktgmc_super_avs.cpp` (KMSuperOCL, upstream `KMSuper`
+alias, exact signature): the FIRST KTGMC motion-pipeline host plugin, building
+the super-sampled pyramid frame over the ALG-VERIFIED `ktgmc_simple.cl` /
+`ktgmc_motion.cl` kernels (pel-upscale wiener pair for sharp levels, separable/
+fused RB2B 1:2 downsamplers for coarse levels, frame padding kernels, pyramid
+cached per source frame). 33 headless cases / 31 frame checks, every plane of
+the produced super frame vs an in-exe CPU reference (pel 1/2/4 x sharp on/off x
+rfilter x chroma, P16 + 8-bit); a replication-border mutation fails every case.
+Uses new SVM (`clSVMAlloc`) staging in `src/host/ocl_host.*` (interior
+sub-buffer origins unreliable on this driver). Documented deviations: SVM
+pyramid buffers, chroma=false planes zero-filled, tail columns zero-filled,
+row-wise copy-back into the AVS pitch, CUDA-reflection border form. Its
+successor KMAnalyse is inventoried but deliberately not assembled (the
+multi-level `GroupOfPlanes` host loop needs an extension of the
+`run_mv_search.py` one-Search-call assembly or a rig CUDA cross-check).
+
 ## 7. Licensing
 
 KTGMC-derived files follow the upstream **GPL** (per

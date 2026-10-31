@@ -25,10 +25,21 @@
 // 12-byte packed {x,y,sad} VECTOR triples — never int3) can be added without
 // changing the program/queue discipline.
 //
-// CL 1.2 API only (CL_TARGET_OPENCL_VERSION 120).
+// CL 1.2 API for the cl_mem buffer discipline (CL_TARGET_OPENCL_VERSION 300 so
+// the OpenCL 2.0 SVM host API is declared; CL_USE_DEPRECATED_OPENCL_1_2_APIS
+// keeps clCreateCommandQueue / clCreateBuffer available).  Device fact
+// (2026-10-31 probe, probe_svm.cpp on the RTX 2060 SUPER, driver 591.74):
+// CL_DEVICE_SVM_CAPABILITIES == CL_DEVICE_SVM_COARSE_GRAIN_BUFFER (0x1);
+// clSVMAlloc + clSetKernelArgSVMPointer with an INTERIOR base+offset pointer
+// works, and host access requires clEnqueueSVMMap/Unmap around memcpy.  This is
+// what lets KMSuper feed the ported kernels (kt_copy_pad,
+// kt_rb2b_bilinear_filtered_with_pad) the interior-origin pointers their
+// upstream CUDA call sites use — cl_mem sub-buffers are broken on this driver
+// (RIG_HANDOFF §9.4), so those two kernels are otherwise undispatchable.
 #pragma once
 
-#define CL_TARGET_OPENCL_VERSION 120
+#define CL_TARGET_OPENCL_VERSION 300
+#define CL_USE_DEPRECATED_OPENCL_1_2_APIS
 #include <CL/cl.h>
 
 #include <cstddef>
@@ -111,6 +122,40 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// SvmBuffer: RAII shared-virtual-memory allocation.  Used only where a kernel
+// needs an INTERIOR-ORIGIN pointer (base + element offset) that a cl_mem cannot
+// express on this driver (no sub-buffers).  Coarse-grain buffer SVM on this
+// device: host <-> device goes through clEnqueueSVMMap/Unmap (blocking) around a
+// memcpy; kernel access is direct.
+// ---------------------------------------------------------------------------
+class SvmBuffer {
+public:
+    SvmBuffer() {}
+    SvmBuffer(Context& ctx, size_t bytes);
+    ~SvmBuffer();
+    SvmBuffer(SvmBuffer&& o) noexcept { *this = std::move(o); }
+    SvmBuffer& operator=(SvmBuffer&& o) noexcept;
+    SvmBuffer(const SvmBuffer&) = delete;
+    SvmBuffer& operator=(const SvmBuffer&) = delete;
+
+    bool empty() const { return p_ == nullptr; }
+    void* ptr() const { return p_; }
+    size_t bytes() const { return bytes_; }
+    // Interior pointer `base + offset_bytes`.
+    void* at(size_t offset_bytes) const { return (uint8_t*)p_ + offset_bytes; }
+
+    // Host <-> device over [offset, offset+bytes) via SVM map/unmap.
+    void write(const void* host, size_t offset, size_t bytes) const;
+    void read(void* host, size_t offset, size_t bytes) const;
+
+private:
+    cl_context ctx_ = nullptr;
+    cl_command_queue queue_ = nullptr;
+    void* p_ = nullptr;
+    size_t bytes_ = 0;
+};
+
+// ---------------------------------------------------------------------------
 // Program: one .cl source unit at one -DPX instantiation, with a kernel cache.
 // ---------------------------------------------------------------------------
 class Program {
@@ -163,6 +208,11 @@ inline void set_arg(cl_kernel k, cl_uint i, unsigned v) {
 inline void set_arg(cl_kernel k, cl_uint i, float v) {
     cl_int e = clSetKernelArg(k, i, sizeof(v), &v);
     if (e != CL_SUCCESS) throw Error("clSetKernelArg(float) failed: " + std::to_string(e));
+}
+// SVM pointer argument (interior origin allowed: pass SvmBuffer::at(offset)).
+inline void set_arg_svm(cl_kernel k, cl_uint i, const void* p) {
+    cl_int e = clSetKernelArgSVMPointer(k, i, p);
+    if (e != CL_SUCCESS) throw Error("clSetKernelArgSVMPointer failed: " + std::to_string(e));
 }
 
 // Dispatch helpers: global size = the exact extents; the ported kernels guard
